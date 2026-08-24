@@ -1,0 +1,30 @@
+FM_TEST_BEGIN 2026-08-24T05:40:52Z tests/fm-session-lock-identity-live-e2e.test.sh family=live-harness-optin expected_gate_skip=optin-env
+# claude 2.1.241 (Claude Code): installed executable claude.exe reports comm='claude.exe' acceptance-kind='claude'
+# claude 2.1.241 (Claude Code): comm='claude' argv='/home/adriantoczydlowski/.nvm/versions/node/v24.16.0/bin/claude' acceptance-kind='claude'
+# claude 2.1.241 (Claude Code): no descendant of a bare launch carried a launch marker verified for claude
+ok - session-lock identity: claude 2.1.241 (Claude Code) is identified, refuses an unrelated session, and releases while suspended
+# codex codex-cli 0.139.0: executable identity names no harness, so the launch-marker accept path stays closed for it and its session-lock verdict is decided by process ancestry alone
+# codex codex-cli 0.139.0: the installed executable codex.js is an interpreter script, so its own name never reaches a reported command name and only the launcher name is typed
+# codex codex-cli 0.139.0: comm='MainThread' argv='node /home/adriantoczydlowski/.nvm/versions/node/v24.16.0/bin/codex' acceptance-kind='none'
+# codex codex-cli 0.139.0: no descendant of a bare launch carried a launch marker verified for codex
+ok - session-lock identity: codex codex-cli 0.139.0 is identified, refuses an unrelated session, and releases while suspended
+# skip: opencode is not installed on this machine, so its session-lock identity is unverified here
+# skip: pi is not installed on this machine, so its session-lock identity is unverified here
+# skip: pi-signed is not installed on this machine, so its session-lock identity is unverified here
+# skip: grok is not installed on this machine, so its session-lock identity is unverified here
+# skip: kimi is not installed on this machine, so its session-lock identity is unverified here
+# skip: cursor is not installed on this machine, so its session-lock identity is unverified here
+# reporter control 'claude.exe': comm='claude.exe' acceptance-kind='claude' (expected claude)
+# reporter control 'claude bg-pty-host': comm='claude bg-pty-h' acceptance-kind='claude' (expected claude)
+# reporter control 'claudette': comm='claudette' acceptance-kind='none' (expected none)
+# reporter control 'claude-code': comm='claude-code' acceptance-kind='none' (expected none)
+# reporter control 'node': comm='node' acceptance-kind='none' (expected none)
+# reporter control 'python3': comm='python3' acceptance-kind='none' (expected none)
+ok - session-lock identity: this machine's reported command names are typed after the reporter's own artifacts, and near misses still are not
+# unchecked: the cross-harness kind distinctness that scopes launch markers needs two harnesses that name themselves by executable identity, and only 1 did here (kinds observed: claude:claude)
+# unverified on this machine (not installed): opencode pi pi-signed grok kimi cursor
+# checked 2 installed harness(es)
+FM_TEST_END 2026-08-24T05:40:59Z tests/fm-session-lock-identity-live-e2e.test.sh exit=0 duration_ms=7403 gate_skip=false
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=7465
+FM_TEST_SUMMARY_FAMILY family=live-harness-optin count=1 duration_ms=7403 failed=0
+FM_TEST_SLOWEST rank=1 script=tests/fm-session-lock-identity-live-e2e.test.sh duration_ms=7403

@@ -1,0 +1,15 @@
+# Regression proof: the new turn-end fail-open case fails without the fix
+
+Tree: base commit 1cb900c bin/ + this branch's tests/ (and only bin/fm-session-lock-lib.sh
+taken from the branch, because tests/session-signals.sh derives its cleared-signal list
+from that library and cannot load the base copy at all).
+
+$ bash tests/fm-turnend-guard.test.sh   # base bin/fm-turnend-guard.sh
+ok - fm-turnend-guard --claude: concurrent auto-arm and guard resets are idempotent and deadlock-free
+ok - fm-turnend-guard --claude: stale rewake epoch does not allow a blind stop
+not ok - an absent auto-arm with an exhausted budget must reach the bounded attended fail-open: expected exit 0, got 2
+exit=1
+
+Same case on the branch head:
+$ bin/fm-test-run.sh tests/fm-turnend-guard.test.sh
+ok - fm-turnend-guard --claude: an auto-arm that never claimed still reaches one bounded attended fail-open

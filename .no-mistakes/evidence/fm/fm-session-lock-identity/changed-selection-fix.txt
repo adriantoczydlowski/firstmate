@@ -1,0 +1,12 @@
+# bin/fm-test-run.sh --changed at branch head d5eb54e
+
+$ bin/fm-test-run.sh --list --changed --base 1cb900c
+rc=0
+selected suites: 152
+
+the suites that own this change, present in the selection:
+tests/fm-claude-stop-autoarm-live-e2e.test.sh
+tests/fm-claude-stop-autoarm.test.sh
+tests/fm-session-lock-ancestry.test.sh
+tests/fm-turnend-guard.test.sh
+tests/fm-session-lock-identity-live-e2e.test.sh
