@@ -1,0 +1,23 @@
+The gate's load-bearing premise, checked against REAL shells on this machine
+(sh, bash, zsh). No multiplexer is needed for this half of the claim.
+
+Probe line the gate sends:  touch <marker> 2>/dev/null
+Claim: the marker appears ONLY on a byte-exact delivery; every head
+truncation degrades the command word into something the shell cannot run.
+
+SHELL      LOST   COMMAND WORD RECEIVED    MARKER           WHAT THE SHELL WOULD SAY (redirect removed)
+sh         0      touch                    CREATED          <silent, succeeded>
+sh         1      ouch                     absent           /bin/sh: ouch: command not found
+sh         2      uch                      absent           /bin/sh: uch: command not found
+sh         3      ch                       absent           /bin/sh: ch: command not found
+sh         4      h                        absent           /bin/sh: h: command not found
+bash       0      touch                    CREATED          <silent, succeeded>
+bash       1      ouch                     absent           /bin/bash: ouch: command not found
+bash       2      uch                      absent           /bin/bash: uch: command not found
+bash       3      ch                       absent           /bin/bash: ch: command not found
+bash       4      h                        absent           /bin/bash: h: command not found
+zsh        0      touch                    CREATED          <silent, succeeded>
+zsh        1      ouch                     absent           zsh:1: command not found: ouch
+zsh        2      uch                      absent           zsh:1: command not found: uch
+zsh        3      ch                       absent           zsh:1: command not found: ch
+zsh        4      h                        absent           zsh:1: command not found: h

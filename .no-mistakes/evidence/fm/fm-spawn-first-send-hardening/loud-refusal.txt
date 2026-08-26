@@ -1,0 +1,16 @@
+--- fm-spawn.sh exit status: 1
+--- captain-visible output (last 3 lines) ---
+warning: <HOME>/data/never-ready-repro/brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+error: task never-ready-repro's pane shell never confirmed it can read a command line (5 probes over 5 polls at 0.05s on firstmate:fm-never-ready-repro); refusing to send 'treehouse get' into a pane that may silently drop its leading bytes; inspect window firstmate:fm-never-ready-repro, which survives this refusal and is left for you to clean up
+--- what the pane's shell received (only probes; no task command) ---
+ouch <TMPDIR>/fm-spawn-ready.sqeZt4/ready 2>/dev/null
+key Enter
+ouch <TMPDIR>/fm-spawn-ready.sqeZt4/ready 2>/dev/null
+key Enter
+ouch <TMPDIR>/fm-spawn-ready.sqeZt4/ready 2>/dev/null
+key Enter
+ouch <TMPDIR>/fm-spawn-ready.sqeZt4/ready 2>/dev/null
+key Enter
+ouch <TMPDIR>/fm-spawn-ready.sqeZt4/ready 2>/dev/null
+--- probe scratch left behind under <TMPDIR> ---
+0 directories

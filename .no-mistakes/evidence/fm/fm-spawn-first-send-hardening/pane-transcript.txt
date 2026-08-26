@@ -1,0 +1,29 @@
+== PRE-FIX (bin/fm-spawn.sh at base 6a2cd6c) ==
+--- fm-spawn.sh exit status: 0
+--- fm-spawn.sh stdout/stderr (tail) ---
+warning: /var/folders/wg/l58p0r3s0f90qy6rt44vnh_00000gn/T//fm-spawn-first-send.pkwcRE/incident/home/data/incident-repro/brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+spawned incident-repro harness=codex kind=ship mode=no-mistakes yolo=off window=firstmate:fm-incident-repro worktree=/var/folders/wg/l58p0r3s0f90qy6rt44vnh_00000gn/T//fm-spawn-first-send.pkwcRE/incident/wt
+--- what the pane's shell actually received (in order) ---
+reehouse get
+xport GOTMPDIR=/tmp/fm-incident-repro/gotmp
+literal env -u CURSOR_AGENT -u CURSOR_INVOKED_AS codex --dangerously-bypass-approvals-and-sandbox -c "notify=[\"bash\",\"-c\",\"touch '/private/var/folders/wg/l58p0r3s0f90qy6rt44vnh_00000gn/T/fm-spawn-first-send.pkwcRE/incident/home/state/incident-repro.turn-ended'\"]" "$('<REPO>/bin/fm-operational-input.sh' encode launch-brief < '<HOME>/data/incident-repro/brief.md')"
+key Enter
+
+== POST-FIX (bin/fm-spawn.sh at fa5aafc) ==
+--- fm-spawn.sh exit status: 0
+--- fm-spawn.sh stdout/stderr (tail) ---
+warning: /var/folders/wg/l58p0r3s0f90qy6rt44vnh_00000gn/T//fm-spawn-first-send.TrswN0/incident/home/data/incident-repro/brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+spawned incident-repro harness=codex kind=ship mode=no-mistakes yolo=off window=firstmate:fm-incident-repro worktree=/var/folders/wg/l58p0r3s0f90qy6rt44vnh_00000gn/T//fm-spawn-first-send.TrswN0/incident/wt
+--- what the pane's shell actually received (in order) ---
+ouch <TMPDIR>/fm-spawn-ready.QXasDn/ready 2>/dev/null
+key Enter
+ouch <TMPDIR>/fm-spawn-ready.QXasDn/ready 2>/dev/null
+key Enter
+ouch <TMPDIR>/fm-spawn-ready.QXasDn/ready 2>/dev/null
+key Enter
+touch <TMPDIR>/fm-spawn-ready.QXasDn/ready 2>/dev/null
+treehouse get
+touch <TMPDIR>/fm-spawn-ready.R6S4Hh/ready 2>/dev/null
+export GOTMPDIR=/tmp/fm-incident-repro/gotmp
+literal env -u CURSOR_AGENT -u CURSOR_INVOKED_AS codex --dangerously-bypass-approvals-and-sandbox -c "notify=[\"bash\",\"-c\",\"touch '/private/var/folders/wg/l58p0r3s0f90qy6rt44vnh_00000gn/T/fm-spawn-first-send.TrswN0/incident/home/state/incident-repro.turn-ended'\"]" "$('<REPO>/bin/fm-operational-input.sh' encode launch-brief < '<HOME>/data/incident-repro/brief.md')"
+key Enter

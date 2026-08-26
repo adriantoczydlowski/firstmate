@@ -1,0 +1,69 @@
+### bin/fm-spawn.sh reverted to base commit 6a2cd6c (pre-fix); tests/fm-spawn-first-send.test.sh run one case at a time
+
+=== test_swallowed_leading_bytes_never_corrupt_the_first_command ===
+not ok - the pane never received an intact treehouse get (no delivered line starts with 'treehouse get')
+--- delivered ---
+reehouse get
+xport GOTMPDIR=/tmp/fm-first-send-swallow-three-a1/gotmp
+literal env -u CURSOR_AGENT -u CURSOR_INVOKED_AS codex --dangerously-bypass-approvals-and-sandbox -c "notify=[\"bash\",\"-c\",\"touch '/private/var/folders/wg/l58p0r3s0f90qy6rt44vnh_00000gn/T/fm-spawn-first-send.F916SA/swallow-three/home/state/first-send-swallow-three-a1.turn-ended'\"]" "$('/Users/adriantoczydlowski/.no-mistakes/worktrees/b0d3d72ad777/01M0VZE71XBW5ZGWMQR44P3XBZ/bin/fm-operational-input.sh' encode launch-brief < '/var/folders/wg/l58p0r3s0f90qy6rt44vnh_00000gn/T//fm-spawn-first-send.F916SA/swallow-three/home/data/first-send-swallow-three-a1/brief.md')"
+key Enter
+[case exited nonzero]
+
+=== test_second_gate_protects_the_launch_environment ===
+not ok - the pane never received an intact launch environment (no delivered line starts with 'export GOTMPDIR=')
+--- delivered ---
+treehouse get
+xport GOTMPDIR=/tmp/fm-first-send-swallow-later-b2/gotmp
+literal env -u CURSOR_AGENT -u CURSOR_INVOKED_AS codex --dangerously-bypass-approvals-and-sandbox -c "notify=[\"bash\",\"-c\",\"touch '/private/var/folders/wg/l58p0r3s0f90qy6rt44vnh_00000gn/T/fm-spawn-first-send.RsYhqy/swallow-later/home/state/first-send-swallow-later-b2.turn-ended'\"]" "$('/Users/adriantoczydlowski/.no-mistakes/worktrees/b0d3d72ad777/01M0VZE71XBW5ZGWMQR44P3XBZ/bin/fm-operational-input.sh' encode launch-brief < '/var/folders/wg/l58p0r3s0f90qy6rt44vnh_00000gn/T//fm-spawn-first-send.RsYhqy/swallow-later/home/data/first-send-swallow-later-b2/brief.md')"
+key Enter
+[case exited nonzero]
+
+=== test_unready_shell_fails_loudly ===
+not ok - spawn exited 0 with a shell that never accepted a command line
+[case exited nonzero]
+
+=== test_healthy_shell_pays_one_probe_per_gate ===
+not ok - the readiness probe did not precede the first task command (first delivery: 'treehouse get')
+[case exited nonzero]
+
+=== test_misconfigured_budget_knob_falls_back_to_its_default ===
+ok - a zero budget knob falls back to its default instead of refusing every spawn
+
+=== test_broken_send_channel_refuses_on_the_channel_not_the_pane ===
+not ok - the refusal did not attribute the failure to the send channel (missing: 'send path is failing, not its shell')
+--- output ---
+warning: /var/folders/wg/l58p0r3s0f90qy6rt44vnh_00000gn/T//fm-spawn-first-send.MTabpi/dead-channel/home/data/first-send-dead-channel-k1/brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+[case exited nonzero]
+
+=== test_status_2_is_not_read_as_uncleared_input_on_tmux ===
+not ok - the refusal did not attribute the failure to the send channel (missing: 'send path is failing')
+--- output ---
+warning: /var/folders/wg/l58p0r3s0f90qy6rt44vnh_00000gn/T//fm-spawn-first-send.2s5TVW/status2/home/data/first-send-status2-m2/brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+[case exited nonzero]
+
+=== test_uncleared_probe_input_is_terminal_on_cmux ===
+not ok - the refusal did not report the uncleared input line the cmux adapter signalled (missing: 'probe input could not be cleared')
+--- output ---
+warning: /var/folders/wg/l58p0r3s0f90qy6rt44vnh_00000gn/T//fm-spawn-first-send.FSKQrV/cmux-uncleared/home/data/first-send-cmux-uncleared-p4/brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+[case exited nonzero]
+
+=== test_intermittent_send_hiccups_still_refuse_on_the_pane ===
+not ok - two non-consecutive send hiccups were reported as a broken send channel instead of an unready pane (missing: 'never confirmed it can read a command line')
+--- output ---
+warning: /var/folders/wg/l58p0r3s0f90qy6rt44vnh_00000gn/T//fm-spawn-first-send.r2ZPF4/hiccup/home/data/first-send-hiccup-n3/brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+[case exited nonzero]
+
+=== test_unusable_tmpdir_falls_back_instead_of_refusing ===
+not ok - the probe root fallback was silent, so the condition is invisible to the captain (missing: 'falling back to /tmp')
+--- output ---
+warning: /var/folders/wg/l58p0r3s0f90qy6rt44vnh_00000gn/T//fm-spawn-first-send.7LLaN2/odd-tmpdir/home/data/first-send-odd-tmpdir-j9/brief.md records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode no-mistakes - confirm its definition of done matches
+spawned first-send-odd-tmpdir-j9 harness=codex kind=ship mode=no-mistakes yolo=off window=firstmate:fm-first-send-odd-tmpdir-j9 worktree=/var/folders/wg/l58p0r3s0f90qy6rt44vnh_00000gn/T//fm-spawn-first-send.7LLaN2/odd-tmpdir/wt
+[case exited nonzero]
+
+=== test_fixture_bypass_is_explicit ===
+ok - the gate stands down only for an explicit fixture bypass
+
+=== test_probe_scratch_is_cleaned_up ===
+not ok - the refusal half of the cleanup case did not refuse
+[case exited nonzero]
+
