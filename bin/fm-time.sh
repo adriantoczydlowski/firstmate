@@ -862,15 +862,16 @@ cmd_report() {
     printf '  %s  %s' "$([ "$p_key" = - ] && printf '(unattributed)' || printf '%s' "$p_key")" "$(fmt_minutes "${proj_total[$p_key]}")"
     [ "${proj_after[$p_key]:-0}" -gt 0 ] && printf ' (%s after hours)' "$(fmt_minutes "${proj_after[$p_key]}")"
     printf '\n'
-    # Stock macOS Bash 3.2 cannot parse $'...' sitting immediately after a
-    # double-quoted variable inside a case PATTERN (unlike a case SUBJECT or a
-    # glob-then-$'...' pattern, both of which it parses fine); building the
-    # tab-joined prefix into its own variable first keeps the literal $'\t'
-    # out of the pattern text entirely.
+    # Stock macOS Bash 3.2's $(...)/<(...) parser naively counts parens to
+    # find the substitution's closing ")"; a case pattern's own closing ")" -
+    # even a plain literal one - confuses that counter unless the pattern has
+    # a leading "(" (POSIX-legal, a no-op everywhere else). This affects every
+    # case statement whose source text sits inside a command or process
+    # substitution, regardless of what the pattern itself contains.
     p_prefix="$p_key"$'\t'
     mapfile -t sorted_tasks < <(
       for kt in "${!key_total[@]}"; do
-        case "$kt" in "$p_prefix"*) printf '%s\n' "$kt" ;; esac
+        case "$kt" in ("$p_prefix"*) printf '%s\n' "$kt" ;; esac
       done | sort
     )
     for kt in "${sorted_tasks[@]}"; do
