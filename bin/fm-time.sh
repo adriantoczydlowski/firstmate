@@ -91,6 +91,10 @@
 #                                    recomputed from start/end at report time,
 #                                    never trusted from a stored field.
 #   data/time-tracking/active       present only between `start` and `stop`.
+#   data/time-tracking/.lock        transient mkdir-based mutex held only for
+#                                    the span of a single command's own
+#                                    read-modify-write; not part of the durable
+#                                    record, and never held across commands.
 #
 # Configuration (gitignored, one setting per file, absent = default):
 #   config/time-tracking-gap-minutes         session-merge gap, minutes (default 45)
@@ -206,6 +210,40 @@ is_after_hours() {  # <epoch> -> yes|no
   else
     printf 'no'
   fi
+}
+
+# ---------------------------------------------------------------- own lock
+
+# A tiny mkdir-based mutex over this home's OWN time-tracking files - never
+# the supervision session lock (state/.lock), which this script only ever
+# reads. mkdir is atomic on every filesystem this script already assumes, so
+# this needs no flock dependency (flock is absent on macOS; see
+# fm-supervise-daemon.sh's own comment on the same tradeoff). Every critical
+# section guarded by this lock is a handful of tiny file rewrites, so a lock
+# dir older than LOCK_STALE_SECS is treated as abandoned by a crashed writer
+# and reclaimed rather than blocking a live captain forever.
+TT_LOCK="$TT/.lock"
+LOCK_STALE_SECS=10
+
+tt_lock() {
+  mkdir -p "$TT"
+  local tries=0 age
+  while ! mkdir "$TT_LOCK" 2>/dev/null; do
+    age=$(fm_time_mtime "$TT_LOCK" 2>/dev/null) || age=""
+    if [ -n "$age" ] && [ "$(( $(now_epoch) - age ))" -ge "$LOCK_STALE_SECS" ]; then
+      rmdir "$TT_LOCK" 2>/dev/null || true
+      continue
+    fi
+    tries=$((tries + 1))
+    [ "$tries" -lt 100 ] || die "another fm-time.sh command appears to be running against this home; try again"
+    sleep 0.1
+  done
+  trap 'rmdir "$TT_LOCK" 2>/dev/null || true' EXIT
+}
+
+tt_unlock() {
+  rmdir "$TT_LOCK" 2>/dev/null || true
+  trap - EXIT
 }
 
 # ---------------------------------------------------------------- cursor
@@ -380,6 +418,7 @@ cmd_propose() {
   done
 
   mkdir -p "$TT"
+  tt_lock
   if [ "$(proposal_count)" -gt 0 ] && [ "$replace" -ne 1 ]; then
     die "a pending proposal batch already exists; resolve it with approve/reject/split, or pass --replace to discard it and rescan"
   fi
@@ -419,6 +458,7 @@ cmd_propose() {
   else
     printf '%s proposed window(s) since %s - review with: fm-time.sh list\n' "$count" "$(epoch_to_local "$since_epoch")"
   fi
+  tt_unlock
 }
 
 cmd_list() {
@@ -503,6 +543,7 @@ cmd_approve() {
     esac
   done
 
+  tt_lock
   [ -s "$TT/proposals.md" ] || die "approve: no pending proposals"
   local block
   block=$(extract_block "$TT/proposals.md" "$id")
@@ -524,11 +565,13 @@ cmd_approve() {
   remove_block "$TT/proposals.md" "$id" > "$TT/proposals.md.tmp"
   mv "$TT/proposals.md.tmp" "$TT/proposals.md"
   advance_cursor_if_batch_done
+  tt_unlock
   printf 'approved %s: %s (%s -> %s)\n' "$id" "$desc" "$start" "$end"
 }
 
 cmd_reject() {
   [ "$#" -gt 0 ] || die "reject: usage: fm-time.sh reject <id>..."
+  tt_lock
   [ -s "$TT/proposals.md" ] || die "reject: no pending proposals"
   local id
   for id in "$@"; do
@@ -540,6 +583,7 @@ cmd_reject() {
     printf 'rejected %s\n' "$id"
   done
   advance_cursor_if_batch_done
+  tt_unlock
 }
 
 cmd_split() {
@@ -554,6 +598,7 @@ cmd_split() {
   done
   [ -n "$at" ] || die "split: --at is required"
 
+  tt_lock
   [ -s "$TT/proposals.md" ] || die "split: no pending proposals"
   local block
   block=$(extract_block "$TT/proposals.md" "$id")
@@ -608,6 +653,7 @@ cmd_split() {
   } > "$TT/proposals.md.new"
   mv "$TT/proposals.md.new" "$TT/proposals.md"
   rm -f "$TT/proposals.md.tmp"
+  tt_unlock
   printf 'split %s into %s-a (%s -> %s) and %s-b (%s -> %s)\n' "$id" "$id" "$start" "$at" "$id" "$at" "$end"
 }
 
@@ -624,6 +670,7 @@ cmd_start() {
     esac
   done
   mkdir -p "$TT"
+  tt_lock
   [ -e "$TT/active" ] && die "start: a live session is already running; run: fm-time.sh stop"
   {
     printf 'start=%s\n' "$(epoch_to_local "$(now_epoch)")"
@@ -631,6 +678,7 @@ cmd_start() {
     printf 'task=%s\n' "$task"
     printf 'desc=%s\n' "$desc"
   } > "$TT/active"
+  tt_unlock
   printf 'started tracking%s\n' "$([ -n "$desc" ] && printf ': %s' "$desc")"
 }
 
@@ -642,16 +690,26 @@ cmd_stop() {
       *) die "stop: unknown argument: $1" ;;
     esac
   done
+  tt_lock
   [ -e "$TT/active" ] || die "stop: no live session is running; run: fm-time.sh start"
-  local start project task desc end
+  local start project task desc end start_epoch end_epoch
   start=$(sed -n 's/^start=//p' "$TT/active" | head -1)
   project=$(sed -n 's/^project=//p' "$TT/active" | head -1)
   task=$(sed -n 's/^task=//p' "$TT/active" | head -1)
   desc=$(sed -n 's/^desc=//p' "$TT/active" | head -1)
   [ -n "$desc_ov" ] && desc=$desc_ov
   end=$(epoch_to_local "$(now_epoch)")
+  start_epoch=$(local_to_epoch "$start") || die "stop: unparseable stored start: $start"
+  end_epoch=$(local_to_epoch "$end") || die "stop: unparseable end: $end"
+  # A start/stop within the same wall-clock minute would otherwise record an
+  # entry whose stored start and end are identical once truncated to minute
+  # granularity - report then silently discards it as invalid, losing the
+  # tracked session. Refuse it up front instead, leaving the active session
+  # in place so the captain can just wait a moment and stop again.
+  [ "$end_epoch" -gt "$start_epoch" ] || die "stop: wait until the current minute has elapsed before stopping"
   append_entry "$start" "$end" "$project" "$task" "$desc"
   rm -f "$TT/active"
+  tt_unlock
   printf 'stopped: %s (%s -> %s)\n' "${desc:-(no description)}" "$start" "$end"
 }
 
@@ -673,7 +731,9 @@ cmd_log() {
   s=$(local_to_epoch "$start") || die "log: unparseable --start: $start"
   e=$(local_to_epoch "$end") || die "log: unparseable --end: $end"
   [ "$e" -gt "$s" ] || die "log: --end must be after --start"
+  tt_lock
   append_entry "$start" "$end" "$project" "$task" "$desc"
+  tt_unlock
   printf 'logged: %s (%s -> %s)\n' "$desc" "$start" "$end"
 }
 

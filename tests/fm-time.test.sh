@@ -243,13 +243,42 @@ test_start_stop_records_a_live_session() {
 
   local status err
   status=0
-  FM_HOME="$home" "$FMTIME" start --desc again >/dev/null || fail "second start after a stop should succeed"
-  err=$(FM_HOME="$home" "$FMTIME" start --desc other 2>&1 >/dev/null) && status=0 || status=$?
+  FM_HOME="$home" FM_TIME_NOW_OVERRIDE=1788810000 "$FMTIME" start --desc again >/dev/null \
+    || fail "second start after a stop should succeed"
+  err=$(FM_HOME="$home" FM_TIME_NOW_OVERRIDE=1788810000 "$FMTIME" start --desc other 2>&1 >/dev/null) \
+    && status=0 || status=$?
   expect_code 1 "$status" "starting a second live session while one is already running"
   assert_contains "$err" "already running" "double-start refusal used the wrong message"
-  FM_HOME="$home" "$FMTIME" stop >/dev/null
+  FM_HOME="$home" FM_TIME_NOW_OVERRIDE=1788810120 "$FMTIME" stop >/dev/null
 
   pass "start/stop records a live-tracked entry and refuses a concurrent second start"
+}
+
+test_stop_refuses_same_minute_session() {
+  local home out status
+  home=$(make_home live-session-same-minute)
+
+  FM_HOME="$home" FM_TIME_NOW_OVERRIDE=1788800000 "$FMTIME" start --desc "blink" >/dev/null \
+    || fail "start failed"
+
+  status=0
+  out=$(FM_HOME="$home" FM_TIME_NOW_OVERRIDE=1788800000 "$FMTIME" stop 2>&1) || status=$?
+  expect_code 1 "$status" "stop within the same wall-clock minute as start"
+  assert_contains "$out" "wait" "same-minute stop refusal used the wrong message"
+  assert_present "$home/data/time-tracking/active" \
+    "a refused same-minute stop must leave the live session running, not discard it"
+  if [ -e "$home/data/time-tracking/entries.md" ]; then
+    assert_no_grep "blink" "$home/data/time-tracking/entries.md" \
+      "a refused same-minute stop must not record a zero-duration entry"
+  fi
+
+  out=$(FM_HOME="$home" FM_TIME_NOW_OVERRIDE=1788800061 "$FMTIME" stop) \
+    || fail "stop should succeed once a minute has actually elapsed"
+  assert_contains "$out" "stopped" "stop did not report success once past the same-minute window"
+  assert_grep "desc=blink" "$home/data/time-tracking/entries.md" \
+    "session was not recorded once stopped past the same-minute window"
+
+  pass "stop refuses a same-minute session instead of silently recording a lost, zero-duration entry"
 }
 
 test_log_records_a_retroactive_entry() {
@@ -368,6 +397,7 @@ test_approve_correction_overrides_proposed_fields
 test_reject_drops_without_recording
 test_split_divides_evidence_at_the_boundary
 test_start_stop_records_a_live_session
+test_stop_refuses_same_minute_session
 test_log_records_a_retroactive_entry
 test_log_without_project_or_task_is_not_blocked
 test_log_refuses_end_before_start
