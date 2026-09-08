@@ -323,6 +323,66 @@ test_log_refuses_end_before_start() {
   pass "log refuses an entry whose end is not after its start"
 }
 
+# ---------------------------------------------------------------- own lock
+
+test_lock_blocks_while_owner_process_is_still_alive() {
+  local home lock_dir sleeper_pid status err elapsed start_s
+  home=$(make_home lock-live-owner)
+  mkdir -p "$home/data/time-tracking"
+  lock_dir="$home/data/time-tracking/.lock"
+  mkdir "$lock_dir"
+
+  sleep 60 &
+  sleeper_pid=$!
+  printf '%s\n' "$sleeper_pid" > "$lock_dir/pid"
+  # A far-past mtime: an age-only staleness check (the pre-fix behavior)
+  # would treat this as abandoned and steal it even though its recorded
+  # owner is still running.
+  touch -t 202001010000 "$lock_dir"
+
+  status=0
+  start_s=$SECONDS
+  err=$(FM_HOME="$home" "$FMTIME" log --start "2026-09-04 20:00" --end "2026-09-04 20:30" --desc x 2>&1) \
+    || status=$?
+  elapsed=$((SECONDS - start_s))
+
+  kill "$sleeper_pid" 2>/dev/null
+  wait "$sleeper_pid" 2>/dev/null
+
+  expect_code 1 "$status" "log against a lock recorded as held by a still-alive owner"
+  assert_contains "$err" "appears to be running" "a live lock owner's hold was stolen instead of respected"
+  [ "$elapsed" -ge 5 ] || fail "the lock was released far too quickly for a live owner to have been respected (waited ${elapsed}s)"
+
+  pass "tt_lock never reclaims a lock whose recorded owner process is still alive, no matter its age"
+}
+
+test_lock_reclaimed_promptly_from_a_dead_owner() {
+  local home lock_dir dead_pid status out elapsed start_s
+  home=$(make_home lock-dead-owner)
+  mkdir -p "$home/data/time-tracking"
+  lock_dir="$home/data/time-tracking/.lock"
+  mkdir "$lock_dir"
+
+  ( exit 0 ) &
+  dead_pid=$!
+  wait "$dead_pid" 2>/dev/null
+  printf '%s\n' "$dead_pid" > "$lock_dir/pid"
+  # Deliberately fresh mtime: an age-only staleness check would refuse to
+  # reclaim this for LOCK_STALE_SECS even though the recorded owner is
+  # already dead; liveness must decide this, not age.
+
+  start_s=$SECONDS
+  out=$(FM_HOME="$home" "$FMTIME" log --start "2026-09-04 20:00" --end "2026-09-04 20:30" --desc reclaimed 2>&1)
+  status=$?
+  elapsed=$((SECONDS - start_s))
+
+  expect_code 0 "$status" "log against a lock abandoned by a dead owner"
+  assert_contains "$out" "logged" "log did not succeed once the dead owner's lock was reclaimed"
+  [ "$elapsed" -lt 5 ] || fail "a lock with a dead recorded owner should reclaim immediately, not wait out a staleness timer (took ${elapsed}s)"
+
+  pass "tt_lock reclaims a lock immediately once its recorded owner is confirmed dead, even when the lock is fresh"
+}
+
 # ---------------------------------------------------------------- report
 
 test_report_groups_by_month_and_splits_after_hours() {
@@ -401,6 +461,8 @@ test_stop_refuses_same_minute_session
 test_log_records_a_retroactive_entry
 test_log_without_project_or_task_is_not_blocked
 test_log_refuses_end_before_start
+test_lock_blocks_while_owner_process_is_still_alive
+test_lock_reclaimed_promptly_from_a_dead_owner
 test_report_groups_by_month_and_splits_after_hours
 test_report_month_boundary_uses_entry_start_date
 test_time_tracking_never_writes_supervision_state

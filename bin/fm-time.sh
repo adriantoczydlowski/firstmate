@@ -218,31 +218,46 @@ is_after_hours() {  # <epoch> -> yes|no
 # the supervision session lock (state/.lock), which this script only ever
 # reads. mkdir is atomic on every filesystem this script already assumes, so
 # this needs no flock dependency (flock is absent on macOS; see
-# fm-supervise-daemon.sh's own comment on the same tradeoff). Every critical
-# section guarded by this lock is a handful of tiny file rewrites, so a lock
-# dir older than LOCK_STALE_SECS is treated as abandoned by a crashed writer
-# and reclaimed rather than blocking a live captain forever.
+# fm-supervise-daemon.sh's own comment on the same tradeoff). The holder's own
+# pid is recorded inside the lock dir the instant it is created, and staleness
+# is decided by that pid's liveness (kill -0), not by how long the lock has
+# been held: `propose` can legitimately hold this lock across a slow evidence
+# scan, and a fixed wall-clock cutoff would let a second command steal the
+# lock out from under a still-running one, corrupting proposals.md or entries
+# in a lost-update race. LOCK_STALE_SECS is kept only as a narrow fallback for
+# the brief window after mkdir succeeds but before the pid file is written
+# (e.g. a crash in between): once a pid is on record, its liveness is
+# authoritative and the lock is held exactly as long as its owner is alive.
 TT_LOCK="$TT/.lock"
-LOCK_STALE_SECS=10
+LOCK_STALE_SECS="${FM_TIME_LOCK_STALE_OVERRIDE:-10}"
 
 tt_lock() {
   mkdir -p "$TT"
-  local tries=0 age
+  local tries=0 age owner_pid
   while ! mkdir "$TT_LOCK" 2>/dev/null; do
-    age=$(fm_time_mtime "$TT_LOCK" 2>/dev/null) || age=""
-    if [ -n "$age" ] && [ "$(( $(now_epoch) - age ))" -ge "$LOCK_STALE_SECS" ]; then
-      rmdir "$TT_LOCK" 2>/dev/null || true
-      continue
+    owner_pid=$(cat "$TT_LOCK/pid" 2>/dev/null) || owner_pid=""
+    if [ -n "$owner_pid" ]; then
+      if ! kill -0 "$owner_pid" 2>/dev/null; then
+        rm -rf "$TT_LOCK" 2>/dev/null || true
+        continue
+      fi
+    else
+      age=$(fm_time_mtime "$TT_LOCK" 2>/dev/null) || age=""
+      if [ -n "$age" ] && [ "$(( $(now_epoch) - age ))" -ge "$LOCK_STALE_SECS" ]; then
+        rm -rf "$TT_LOCK" 2>/dev/null || true
+        continue
+      fi
     fi
     tries=$((tries + 1))
     [ "$tries" -lt 100 ] || die "another fm-time.sh command appears to be running against this home; try again"
     sleep 0.1
   done
-  trap 'rmdir "$TT_LOCK" 2>/dev/null || true' EXIT
+  printf '%s\n' "$$" > "$TT_LOCK/pid"
+  trap 'rm -rf "$TT_LOCK" 2>/dev/null || true' EXIT
 }
 
 tt_unlock() {
-  rmdir "$TT_LOCK" 2>/dev/null || true
+  rm -rf "$TT_LOCK" 2>/dev/null || true
   trap - EXIT
 }
 
