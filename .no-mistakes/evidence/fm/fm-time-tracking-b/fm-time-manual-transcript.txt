@@ -1,0 +1,83 @@
+
+$ /home/adriantoczydlowski/.no-mistakes/worktrees/ca7813414826/01M2075KRK4SNFEAEZZDT4P1MM/bin/fm-time.sh propose --since 2026-09-01 00:00
+3 proposed window(s) since 2026-09-01 00:00 - review with: fm-time.sh list
+
+$ /home/adriantoczydlowski/.no-mistakes/worktrees/ca7813414826/01M2075KRK4SNFEAEZZDT4P1MM/bin/fm-time.sh list
+[p1]
+  start    2026-09-04 12:00
+  end      2026-09-04 12:15
+  project  FnO
+  task     carry-scout-example
+  desc     Diagnose the flaky test data/carry-scout-example/report.md
+  evidence: 1788523200 | backlog | Diagnose the flaky test data/carry-scout-example/report.md
+
+[p2]
+  start    2026-09-03 09:10
+  end      2026-09-03 10:05
+  project  FnO
+  task     carry-widget-fix
+  desc     done: shipped the widget fix
+  evidence: 1788426600 | meta | task record touched
+  evidence: 1788429000 | status | done: shipped the widget fix
+
+[p3]
+  start    2026-09-03 21:00
+  end      2026-09-03 21:35
+  project  FnO
+  task     scout-nightly-check
+  desc     done: nightly build is green
+  evidence: 1788469200 | meta | task record touched
+  evidence: 1788470400 | status | done: nightly build is green
+
+$ /home/adriantoczydlowski/.no-mistakes/worktrees/ca7813414826/01M2075KRK4SNFEAEZZDT4P1MM/bin/fm-time.sh approve p1
+approved p1: Diagnose the flaky test data/carry-scout-example/report.md (2026-09-04 12:00 -> 2026-09-04 12:15)
+
+$ /home/adriantoczydlowski/.no-mistakes/worktrees/ca7813414826/01M2075KRK4SNFEAEZZDT4P1MM/bin/fm-time.sh approve p2 --start 2026-09-03 20:45 --end 2026-09-03 21:30 --desc corrected: nightly build check ran longer than pings show
+approved p2: corrected: nightly build check ran longer than pings show (2026-09-03 20:45 -> 2026-09-03 21:30)
+
+$ /home/adriantoczydlowski/.no-mistakes/worktrees/ca7813414826/01M2075KRK4SNFEAEZZDT4P1MM/bin/fm-time.sh reject p3
+rejected p3
+
+$ /home/adriantoczydlowski/.no-mistakes/worktrees/ca7813414826/01M2075KRK4SNFEAEZZDT4P1MM/bin/fm-time.sh list
+no pending proposals. Run: fm-time.sh propose
+
+$ /home/adriantoczydlowski/.no-mistakes/worktrees/ca7813414826/01M2075KRK4SNFEAEZZDT4P1MM/bin/fm-time.sh log --start 2026-09-05 07:00 --end 2026-09-05 07:45 --project FnO --task early-standup-prep --desc retroactive: prepped standup notes before the morning sync
+logged: retroactive: prepped standup notes before the morning sync (2026-09-05 07:00 -> 2026-09-05 07:45)
+
+$ /home/adriantoczydlowski/.no-mistakes/worktrees/ca7813414826/01M2075KRK4SNFEAEZZDT4P1MM/bin/fm-time.sh report --month 2026-09
+Time tracking report - 2026-09
+total: 1h45m tracked across 3 entries
+  after hours (weekend or outside 09:00-18:00 local): 1h30m
+  business hours: 0h15m
+
+by project / task:
+  FnO  1h45m (1h30m after hours)
+    carry-scout-example  0h15m
+      Diagnose the flaky test data/carry-scout-example/report.md
+    carry-widget-fix  0h45m (0h45m after hours)
+      corrected: nightly build check ran longer than pings show
+    early-standup-prep  0h45m (0h45m after hours)
+      retroactive: prepped standup notes before the morning sync
+
+--- hand-edit durability check ---
+$ sed -i 's/end=2026-09-05 07:45/end=2026-09-05 09:15/' data/time-tracking/entries.md
+(entries.md is plain key=value text, hand-edited directly)
+
+$ fm-time.sh report --month 2026-09   # after hand-edit
+Time tracking report - 2026-09
+total: 3h15m tracked across 3 entries
+  after hours (weekend or outside 09:00-18:00 local): 3h00m
+  business hours: 0h15m
+
+by project / task:
+  FnO  3h15m (3h00m after hours)
+    carry-scout-example  0h15m
+      Diagnose the flaky test data/carry-scout-example/report.md
+    carry-widget-fix  0h45m (0h45m after hours)
+      corrected: nightly build check ran longer than pings show
+    early-standup-prep  2h15m (2h15m after hours)
+      retroactive: prepped standup notes before the morning sync
+
+Confirms duration/after-hours are recomputed from stored start/end at report
+time (early-standup-prep went from 0h45m to 2h15m after only the end= line
+was hand-edited; no duration/after-hours field exists to have gone stale).
