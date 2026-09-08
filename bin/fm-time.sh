@@ -35,12 +35,14 @@
 #                                      bare mtime can prove.
 #   - data/<id>/report.md mtime       used: scout-report-finalized ping.
 #   - data/backlog.md, data/done-archive.md
-#                                     used: "(done YYYY-MM-DD)" and "(reported
-#                                      YYYY-MM-DD)" entries (tasks-axi writes the
-#                                      latter for a scout task closed with
-#                                      --report) become day-only pings (noon
-#                                      local), the one signal that survives a
-#                                      torn-down task's state files.
+#                                     used: "(done YYYY-MM-DD)", "(reported
+#                                      YYYY-MM-DD)" (tasks-axi writes this for a
+#                                      task closed with --report), and "(merged
+#                                      YYYY-MM-DD)" (tasks-axi writes this for a
+#                                      task closed with --pr) entries all become
+#                                      day-only pings (noon local), the one
+#                                      signal that survives a torn-down task's
+#                                      state files.
 #   - state/.wake-queue                used opportunistically: it carries real epoch
 #                                      seconds, but the queue is drained on
 #                                      acknowledgement, so it holds only whatever is
@@ -253,11 +255,24 @@ tt_lock() {
     sleep 0.1
   done
   printf '%s\n' "$$" > "$TT_LOCK/pid"
-  trap 'rm -rf "$TT_LOCK" 2>/dev/null || true' EXIT
+  trap tt_release_if_owner EXIT
+}
+
+# Removes the lock only if its recorded pid is still this process's own pid.
+# Used both as the ordinary unlock path and as the EXIT trap handler so a
+# signal arriving between tt_unlock's own removal and its `trap -` clear can
+# never blow away a lock a *different* command has since acquired: by the
+# time the trap fires, the pid file either matches this process (safe to
+# remove) or belongs to someone else / is already gone (leave it alone).
+tt_release_if_owner() {
+  local owner_pid
+  owner_pid=$(cat "$TT_LOCK/pid" 2>/dev/null) || owner_pid=""
+  [ "$owner_pid" = "$$" ] && rm -rf "$TT_LOCK" 2>/dev/null
+  return 0
 }
 
 tt_unlock() {
-  rm -rf "$TT_LOCK" 2>/dev/null || true
+  tt_release_if_owner
   trap - EXIT
 }
 
@@ -350,6 +365,14 @@ gather_evidence() {  # <since-epoch> <out-file>
           # archive) is silently invisible to propose.
           text=$(printf '%s' "$line" | sed -n 's/.*(reported \([0-9-]\{10\}\)).*/\1/p')
           ;;
+        *'(merged '????-??-??')'*)
+          # tasks-axi writes "(merged YYYY-MM-DD)" instead of "(done ...)"
+          # when a task is closed with --pr (verified against this repo's own
+          # tasks-axi binary: `done <id> --pr <url>` produces this marker);
+          # without this branch every PR-linked completion is silently
+          # invisible to propose.
+          text=$(printf '%s' "$line" | sed -n 's/.*(merged \([0-9-]\{10\}\)).*/\1/p')
+          ;;
         *) continue ;;
       esac
       [ -n "$text" ] || continue
@@ -359,7 +382,7 @@ gather_evidence() {  # <since-epoch> <out-file>
       [ -n "$project" ] || project=-
       payload=$(printf '%s' "$line" \
         | sed 's/^- \[x\] [^ ]* - //' \
-        | sed -e 's/ (done [0-9-]*)//' -e 's/ (reported [0-9-]*)//' -e 's/ (repo: [^)]*)//' \
+        | sed -e 's/ (done [0-9-]*)//' -e 's/ (reported [0-9-]*)//' -e 's/ (merged [0-9-]*)//' -e 's/ (repo: [^)]*)//' \
         | cut -c1-140)
       printf '%s\t%s\t%s\tbacklog\t%s\n' "$epoch" "$project" "$id" "$payload" >> "$out"
     done < "$bf"

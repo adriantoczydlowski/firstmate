@@ -125,6 +125,32 @@ EOF
   pass "propose reads (reported YYYY-MM-DD) scout completions from the backlog, not only (done ...)"
 }
 
+test_propose_reads_merged_completions_from_backlog() {
+  local home
+  home=$(make_home propose-merged)
+
+  # tasks-axi writes "(merged YYYY-MM-DD)" instead of "(done ...)" for a task
+  # closed with `done <id> --pr <url>` (verified against a real tasks-axi
+  # binary); without handling this marker, every PR-linked completion is
+  # invisible to propose.
+  cat > "$home/data/backlog.md" <<'EOF'
+- [x] carry-ship-example - Ship the thing https://github.com/o/r/pull/42 (repo: FnO) (merged 2026-09-05)
+EOF
+
+  local out
+  out=$(FM_HOME="$home" "$FMTIME" propose --since "2026-09-01 00:00") \
+    || fail "propose failed on a (merged ...) backlog completion"
+  assert_contains "$out" "1 proposed window" "a (merged ...) backlog completion produced no proposal"
+
+  local list
+  list=$(FM_HOME="$home" "$FMTIME" list) || fail "list failed"
+  assert_contains "$list" "project  FnO" "merged-completion proposal did not attribute the (repo: ...) project"
+  assert_contains "$list" "task     carry-ship-example" "merged-completion proposal did not attribute the task id"
+  assert_not_contains "$list" "merged 2026-09-05" "merged-completion evidence text leaked the raw marker instead of the description"
+
+  pass "propose reads (merged YYYY-MM-DD) PR completions from the backlog, not only (done ...)"
+}
+
 # ---------------------------------------------------------------- approve / correction
 
 test_approve_records_entry_and_advances_cursor() {
@@ -452,6 +478,7 @@ test_propose_clusters_synthetic_status_and_meta_evidence
 test_propose_wide_gap_produces_two_windows
 test_propose_refuses_second_batch_without_replace
 test_propose_reads_reported_scout_completions_from_backlog
+test_propose_reads_merged_completions_from_backlog
 test_approve_records_entry_and_advances_cursor
 test_approve_correction_overrides_proposed_fields
 test_reject_drops_without_recording
