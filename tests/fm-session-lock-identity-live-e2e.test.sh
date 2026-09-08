@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# tests/fm-session-lock-identity-live-e2e.test.sh - opt-in guard proving every
-# INSTALLED harness is still identified correctly by the session-lock predicates
-# in bin/fm-session-lock-lib.sh.
+# tests/fm-session-lock-identity-live-e2e.test.sh - default-on guard proving
+# every INSTALLED harness is still identified correctly by the session-lock
+# predicates in bin/fm-session-lock-lib.sh.
 #
 # Why this file exists: the whole session-lock verdict is read off things the
 # harness vendor emits - the process name it runs under, the argv it presents,
@@ -33,17 +33,17 @@
 # per-harness marker evidence and how it was obtained.
 #
 # Standard CI has no harness binaries or credentials, so this real-harness guard
-# is opt-in and on-demand. tests/fm-session-lock-ancestry.test.sh pins the same
-# logic in CI with real processes and no harness. Run this guard after any
-# harness upgrade and before trusting refreshed per-harness evidence.
+# runs by default only where a real pty and harness are actually installed.
+# tests/fm-session-lock-ancestry.test.sh pins the same logic in CI with real
+# processes and no harness. Run this guard after any harness upgrade and before
+# trusting refreshed per-harness evidence.
 set -u
 
-if [ "${FM_SESSION_LOCK_IDENTITY_LIVE:-0}" != 1 ]; then
-  echo "skip: set FM_SESSION_LOCK_IDENTITY_LIVE=1 to run the installed-harness session-lock identity guard"
-  exit 0
-fi
+# shellcheck source=tests/lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+fm_live_gate default-on FM_SESSION_LOCK_IDENTITY_LIVE tmux
+
 LIB="$ROOT/bin/fm-session-lock-lib.sh"
 SOCKET="fm-session-lock-identity-$$"
 LAB=
@@ -68,7 +68,6 @@ pass() { printf 'ok - %s\n' "$1"; }
 note() { printf '# %s\n' "$1"; }
 trap cleanup_all EXIT
 
-command -v tmux >/dev/null 2>&1 || fail "tmux not found; this guard needs a real pty because several harnesses exit immediately without one"
 REAL_TMUX=$(command -v tmux)
 LAB=$(mktemp -d "${TMPDIR:-/tmp}/fm-session-lock-identity.XXXXXX")
 mkdir -p "$LAB/wt"
