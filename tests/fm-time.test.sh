@@ -409,6 +409,39 @@ test_lock_reclaimed_promptly_from_a_dead_owner() {
   pass "tt_lock reclaims a lock immediately once its recorded owner is confirmed dead, even when the lock is fresh"
 }
 
+test_lock_reclaimed_when_owner_pid_was_reused() {
+  local home lock_dir live_pid status out elapsed start_s
+  home=$(make_home lock-reused-pid)
+  mkdir -p "$home/data/time-tracking"
+  lock_dir="$home/data/time-tracking/.lock"
+  mkdir "$lock_dir"
+
+  # A live process, but recorded alongside a start timestamp that does not
+  # match its real one: this is what a reused pid looks like on disk after
+  # its original owner exited and an unrelated process picked up the same
+  # pid number. kill -0 alone cannot tell this apart from a genuine live
+  # owner; only the recorded start time can.
+  sleep 60 &
+  live_pid=$!
+  printf '%s\n' "$live_pid" > "$lock_dir/pid"
+  printf '%s\n' "Mon Jan  1 00:00:00 1990" > "$lock_dir/start"
+  touch -t 202001010000 "$lock_dir"
+
+  start_s=$SECONDS
+  out=$(FM_HOME="$home" "$FMTIME" log --start "2026-09-04 20:00" --end "2026-09-04 20:30" --desc reclaimed 2>&1)
+  status=$?
+  elapsed=$((SECONDS - start_s))
+
+  kill "$live_pid" 2>/dev/null
+  wait "$live_pid" 2>/dev/null
+
+  expect_code 0 "$status" "log against a lock whose recorded owner pid was reused by an unrelated live process"
+  assert_contains "$out" "logged" "log did not succeed once the reused-pid lock was reclaimed"
+  [ "$elapsed" -lt 5 ] || fail "a lock whose owner start time no longer matches should reclaim immediately (took ${elapsed}s)"
+
+  pass "tt_lock reclaims a lock whose live recorded pid no longer matches its recorded start time (pid reuse)"
+}
+
 # ---------------------------------------------------------------- report
 
 test_report_groups_by_month_and_splits_after_hours() {
@@ -490,6 +523,7 @@ test_log_without_project_or_task_is_not_blocked
 test_log_refuses_end_before_start
 test_lock_blocks_while_owner_process_is_still_alive
 test_lock_reclaimed_promptly_from_a_dead_owner
+test_lock_reclaimed_when_owner_pid_was_reused
 test_report_groups_by_month_and_splits_after_hours
 test_report_month_boundary_uses_entry_start_date
 test_time_tracking_never_writes_supervision_state
