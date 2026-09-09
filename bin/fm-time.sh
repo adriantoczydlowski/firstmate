@@ -230,23 +230,65 @@ is_after_hours() {  # <epoch> -> yes|no
 # the brief window after mkdir succeeds but before the pid file is written
 # (e.g. a crash in between): once a pid is on record, its liveness is
 # authoritative and the lock is held exactly as long as its owner is alive.
+#
+# Two further races are guarded explicitly rather than left theoretical,
+# because this repo's own operational pattern - many short-lived helper
+# processes spawned in quick succession - makes both plausible in practice,
+# not just on paper:
+#   - PID reuse: kill -0 alone cannot tell a live owner from an unrelated
+#     process that reused its pid after it exited. The lock dir also records
+#     the owner's process-start timestamp (`ps -o lstart=`, supported by both
+#     GNU and BSD ps) alongside its pid; a live pid whose current start time
+#     no longer matches the recorded one is a different process wearing the
+#     same pid, so it is reclaimed exactly like a dead one. When `ps` cannot
+#     report a start time (unsupported ps, sandboxed pid namespace) the check
+#     is skipped rather than guessed, falling back to plain kill -0 - refusing
+#     to weaken the working case for a case that cannot be verified.
+#   - Reclaim race: two waiters can each decide the same lock is stale before
+#     either removes it; naive `rm -rf` from the delayed one would then delete
+#     whichever fresh lock the other waiter has since created at that path.
+#     tt_reclaim_stale renames the specific directory instance away before
+#     deleting it - `mv` is atomic, so only one racing reclaimer can ever move
+#     a given instance, and a directory recreated after the move is a
+#     different filesystem entry the move never touches.
 TT_LOCK="$TT/.lock"
 LOCK_STALE_SECS="${FM_TIME_LOCK_STALE_OVERRIDE:-10}"
 
+tt_owner_start() {  # <pid> -> that pid's process-start timestamp, or nothing
+  ps -o lstart= -p "$1" 2>/dev/null
+}
+
+# Atomically relocates a lock dir believed stale before removing it, so a
+# delayed reclaimer can never delete a lock a new owner has since created at
+# the same path (see the mutex comment above for the exact race this closes).
+tt_reclaim_stale() {
+  local reap="$TT_LOCK.reap.$$"
+  mv "$TT_LOCK" "$reap" 2>/dev/null || return 0
+  rm -rf "$reap" 2>/dev/null || true
+}
+
 tt_lock() {
   mkdir -p "$TT"
-  local tries=0 age owner_pid
+  local tries=0 age owner_pid owner_start cur_start
   while ! mkdir "$TT_LOCK" 2>/dev/null; do
     owner_pid=$(cat "$TT_LOCK/pid" 2>/dev/null) || owner_pid=""
     if [ -n "$owner_pid" ]; then
       if ! kill -0 "$owner_pid" 2>/dev/null; then
-        rm -rf "$TT_LOCK" 2>/dev/null || true
+        tt_reclaim_stale
         continue
+      fi
+      owner_start=$(cat "$TT_LOCK/start" 2>/dev/null) || owner_start=""
+      if [ -n "$owner_start" ]; then
+        cur_start=$(tt_owner_start "$owner_pid") || cur_start=""
+        if [ -n "$cur_start" ] && [ "$cur_start" != "$owner_start" ]; then
+          tt_reclaim_stale
+          continue
+        fi
       fi
     else
       age=$(fm_time_mtime "$TT_LOCK" 2>/dev/null) || age=""
       if [ -n "$age" ] && [ "$(( $(now_epoch) - age ))" -ge "$LOCK_STALE_SECS" ]; then
-        rm -rf "$TT_LOCK" 2>/dev/null || true
+        tt_reclaim_stale
         continue
       fi
     fi
@@ -255,6 +297,7 @@ tt_lock() {
     sleep 0.1
   done
   printf '%s\n' "$$" > "$TT_LOCK/pid"
+  tt_owner_start "$$" > "$TT_LOCK/start" 2>/dev/null || : > "$TT_LOCK/start"
   trap tt_release_if_owner EXIT
 }
 
