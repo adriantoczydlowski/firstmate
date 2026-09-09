@@ -253,21 +253,25 @@ is_after_hours() {  # <epoch> -> yes|no
 #     is skipped rather than guessed, falling back to plain kill -0 - refusing
 #     to weaken the working case for a case that cannot be verified.
 #   - Delete-wrong-instance race: deciding a lock is stale and then acting on
-#     it are two separate steps, so *anything* that only checks "is the path
-#     still what I inspected" right before deleting - including a plain
-#     `mv $TT_LOCK elsewhere` on the assumption that the move itself is the
-#     safety - is not enough: a plain `mv` relocates whatever currently sits
-#     at that path, not the specific instance a waiter inspected, so a
-#     successor's freshly created live lock at the same path would be moved
-#     and deleted just as readily as the stale one. tt_remove_locked_instance
-#     closes this for real by checking identity, not just path: it captures
-#     the directory's inode before acting, renames it aside, and only deletes
-#     the moved copy if its inode still matches what was captured - a
-#     mismatch means a different lock has since taken that path, so the moved
-#     copy is put back untouched instead of being deleted. The same helper is
-#     used by both a waiter reclaiming a lock it believes abandoned and an
-#     owner releasing a lock it confirmed is its own, since both are exactly
-#     this same "verify identity, then delete" problem.
+#     it are two separate steps, so a successor could create a fresh live
+#     lock at the same path in between. Checking identity right before the
+#     delete closes the ordinary case; an earlier version of this fix instead
+#     moved the directory aside first and verified after, which is actually
+#     worse - moving it away first creates a moment where the path sits
+#     empty for a *third* command to claim while the second is still
+#     deciding whether to put the (possibly-live) directory back, trading one
+#     race for a different one. tt_remove_locked_instance instead captures
+#     the directory's inode, re-checks it immediately before the one
+#     deleting syscall, and does nothing at all - no move, no restore, no
+#     window where the path is vacant - the instant it no longer matches.
+#     This does not claim perfect atomicity (no flock, per above) but keeps
+#     the unavoidable gap to a single stat immediately ahead of a single
+#     delete, the floor for a mkdir-based lock on a single-operator tool one
+#     person invokes by hand rather than a server serving concurrent
+#     requests. The same helper is used by both a waiter reclaiming a lock it
+#     believes abandoned and an owner releasing a lock it confirmed is its
+#     own, since both are exactly this "verify identity, then delete"
+#     problem.
 TT_LOCK="$TT/.lock"
 LOCK_STALE_SECS="${FM_TIME_LOCK_STALE_OVERRIDE:-10}"
 
@@ -276,14 +280,11 @@ tt_owner_start() {  # <pid> -> that pid's process-start timestamp, or nothing
 }
 
 tt_remove_locked_instance() {  # <expected-inode>
-  local expected=$1 reap="$TT_LOCK.reap.$$" got
-  mv "$TT_LOCK" "$reap" 2>/dev/null || return 0
-  got=$(fm_time_inode "$reap" 2>/dev/null) || got=""
-  if [ -n "$expected" ] && [ "$got" != "$expected" ]; then
-    mv "$reap" "$TT_LOCK" 2>/dev/null || true
-    return 0
-  fi
-  rm -rf "$reap" 2>/dev/null || true
+  local expected=$1 cur
+  [ -n "$expected" ] || return 0
+  cur=$(fm_time_inode "$TT_LOCK" 2>/dev/null) || cur=""
+  [ "$cur" = "$expected" ] || return 0
+  rm -rf "$TT_LOCK" 2>/dev/null || true
 }
 
 tt_lock() {
