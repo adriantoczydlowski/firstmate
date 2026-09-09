@@ -146,6 +146,14 @@ fm_time_mtime() {  # <path> -> epoch seconds, or nothing on failure
   fi
 }
 
+fm_time_inode() {  # <path> -> inode number, or nothing on failure
+  if [ "$(uname)" = Darwin ]; then
+    /usr/bin/stat -f %i "$1" 2>/dev/null
+  else
+    stat -c %i "$1" 2>/dev/null
+  fi
+}
+
 now_epoch() { printf '%s\n' "${FM_TIME_NOW_OVERRIDE:-$(date +%s)}"; }
 
 # epoch -> "YYYY-MM-DD HH:MM" local wall clock.
@@ -230,23 +238,78 @@ is_after_hours() {  # <epoch> -> yes|no
 # the brief window after mkdir succeeds but before the pid file is written
 # (e.g. a crash in between): once a pid is on record, its liveness is
 # authoritative and the lock is held exactly as long as its owner is alive.
+#
+# Two further races are guarded explicitly rather than left theoretical,
+# because this repo's own operational pattern - many short-lived helper
+# processes spawned in quick succession - makes both plausible in practice,
+# not just on paper:
+#   - PID reuse: kill -0 alone cannot tell a live owner from an unrelated
+#     process that reused its pid after it exited. The lock dir also records
+#     the owner's process-start timestamp (`ps -o lstart=`, supported by both
+#     GNU and BSD ps) alongside its pid; a live pid whose current start time
+#     no longer matches the recorded one is a different process wearing the
+#     same pid, so it is reclaimed exactly like a dead one. When `ps` cannot
+#     report a start time (unsupported ps, sandboxed pid namespace) the check
+#     is skipped rather than guessed, falling back to plain kill -0 - refusing
+#     to weaken the working case for a case that cannot be verified.
+#   - Delete-wrong-instance race: deciding a lock is stale and then acting on
+#     it are two separate steps, so a successor could create a fresh live
+#     lock at the same path in between. Checking identity right before the
+#     delete closes the ordinary case; an earlier version of this fix instead
+#     moved the directory aside first and verified after, which is actually
+#     worse - moving it away first creates a moment where the path sits
+#     empty for a *third* command to claim while the second is still
+#     deciding whether to put the (possibly-live) directory back, trading one
+#     race for a different one. tt_remove_locked_instance instead captures
+#     the directory's inode, re-checks it immediately before the one
+#     deleting syscall, and does nothing at all - no move, no restore, no
+#     window where the path is vacant - the instant it no longer matches.
+#     This does not claim perfect atomicity (no flock, per above) but keeps
+#     the unavoidable gap to a single stat immediately ahead of a single
+#     delete, the floor for a mkdir-based lock on a single-operator tool one
+#     person invokes by hand rather than a server serving concurrent
+#     requests. The same helper is used by both a waiter reclaiming a lock it
+#     believes abandoned and an owner releasing a lock it confirmed is its
+#     own, since both are exactly this "verify identity, then delete"
+#     problem.
 TT_LOCK="$TT/.lock"
 LOCK_STALE_SECS="${FM_TIME_LOCK_STALE_OVERRIDE:-10}"
 
+tt_owner_start() {  # <pid> -> that pid's process-start timestamp, or nothing
+  ps -o lstart= -p "$1" 2>/dev/null
+}
+
+tt_remove_locked_instance() {  # <expected-inode>
+  local expected=$1 cur
+  [ -n "$expected" ] || return 0
+  cur=$(fm_time_inode "$TT_LOCK" 2>/dev/null) || cur=""
+  [ "$cur" = "$expected" ] || return 0
+  rm -rf "$TT_LOCK" 2>/dev/null || true
+}
+
 tt_lock() {
   mkdir -p "$TT"
-  local tries=0 age owner_pid
+  local tries=0 age inode owner_pid owner_start cur_start
   while ! mkdir "$TT_LOCK" 2>/dev/null; do
+    inode=$(fm_time_inode "$TT_LOCK" 2>/dev/null) || inode=""
     owner_pid=$(cat "$TT_LOCK/pid" 2>/dev/null) || owner_pid=""
     if [ -n "$owner_pid" ]; then
       if ! kill -0 "$owner_pid" 2>/dev/null; then
-        rm -rf "$TT_LOCK" 2>/dev/null || true
+        tt_remove_locked_instance "$inode"
         continue
+      fi
+      owner_start=$(cat "$TT_LOCK/start" 2>/dev/null) || owner_start=""
+      if [ -n "$owner_start" ]; then
+        cur_start=$(tt_owner_start "$owner_pid") || cur_start=""
+        if [ -n "$cur_start" ] && [ "$cur_start" != "$owner_start" ]; then
+          tt_remove_locked_instance "$inode"
+          continue
+        fi
       fi
     else
       age=$(fm_time_mtime "$TT_LOCK" 2>/dev/null) || age=""
       if [ -n "$age" ] && [ "$(( $(now_epoch) - age ))" -ge "$LOCK_STALE_SECS" ]; then
-        rm -rf "$TT_LOCK" 2>/dev/null || true
+        tt_remove_locked_instance "$inode"
         continue
       fi
     fi
@@ -255,19 +318,25 @@ tt_lock() {
     sleep 0.1
   done
   printf '%s\n' "$$" > "$TT_LOCK/pid"
+  tt_owner_start "$$" > "$TT_LOCK/start" 2>/dev/null || : > "$TT_LOCK/start"
   trap tt_release_if_owner EXIT
 }
 
-# Removes the lock only if its recorded pid is still this process's own pid.
-# Used both as the ordinary unlock path and as the EXIT trap handler so a
-# signal arriving between tt_unlock's own removal and its `trap -` clear can
-# never blow away a lock a *different* command has since acquired: by the
-# time the trap fires, the pid file either matches this process (safe to
-# remove) or belongs to someone else / is already gone (leave it alone).
+# Removes the lock only if its recorded pid is still this process's own pid,
+# and even then only the exact instance just confirmed as this process's own
+# (see tt_remove_locked_instance above). Used both as the ordinary unlock
+# path and as the EXIT trap handler so a signal arriving between tt_unlock's
+# own removal and its `trap -` clear can never blow away a lock a *different*
+# command has since acquired: by the time the trap fires, the pid file either
+# matches this process (safe to remove) or belongs to someone else / is
+# already gone (leave it alone).
 tt_release_if_owner() {
-  local owner_pid
+  local owner_pid inode
   owner_pid=$(cat "$TT_LOCK/pid" 2>/dev/null) || owner_pid=""
-  [ "$owner_pid" = "$$" ] && rm -rf "$TT_LOCK" 2>/dev/null
+  if [ "$owner_pid" = "$$" ]; then
+    inode=$(fm_time_inode "$TT_LOCK" 2>/dev/null) || inode=""
+    tt_remove_locked_instance "$inode"
+  fi
   return 0
 }
 
@@ -855,16 +924,23 @@ cmd_report() {
     "$invalid" "$([ "$invalid" -eq 1 ] && printf y || printf ies)"
   printf '\nby project / task:\n'
 
-  local p_key kt task_name
+  local p_key kt task_name p_prefix
   local -a sorted_projects sorted_tasks
   mapfile -t sorted_projects < <(printf '%s\n' "${!proj_total[@]}" | sort)
   for p_key in "${sorted_projects[@]}"; do
     printf '  %s  %s' "$([ "$p_key" = - ] && printf '(unattributed)' || printf '%s' "$p_key")" "$(fmt_minutes "${proj_total[$p_key]}")"
     [ "${proj_after[$p_key]:-0}" -gt 0 ] && printf ' (%s after hours)' "$(fmt_minutes "${proj_after[$p_key]}")"
     printf '\n'
+    # Stock macOS Bash 3.2's $(...)/<(...) parser naively counts parens to
+    # find the substitution's closing ")"; a case pattern's own closing ")" -
+    # even a plain literal one - confuses that counter unless the pattern has
+    # a leading "(" (POSIX-legal, a no-op everywhere else). This affects every
+    # case statement whose source text sits inside a command or process
+    # substitution, regardless of what the pattern itself contains.
+    p_prefix="$p_key"$'\t'
     mapfile -t sorted_tasks < <(
       for kt in "${!key_total[@]}"; do
-        case "$kt" in "$p_key"$'\t'*) printf '%s\n' "$kt" ;; esac
+        case "$kt" in ("$p_prefix"*) printf '%s\n' "$kt" ;; esac
       done | sort
     )
     for kt in "${sorted_tasks[@]}"; do
