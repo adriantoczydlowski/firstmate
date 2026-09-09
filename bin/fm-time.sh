@@ -146,6 +146,14 @@ fm_time_mtime() {  # <path> -> epoch seconds, or nothing on failure
   fi
 }
 
+fm_time_inode() {  # <path> -> inode number, or nothing on failure
+  if [ "$(uname)" = Darwin ]; then
+    /usr/bin/stat -f %i "$1" 2>/dev/null
+  else
+    stat -c %i "$1" 2>/dev/null
+  fi
+}
+
 now_epoch() { printf '%s\n' "${FM_TIME_NOW_OVERRIDE:-$(date +%s)}"; }
 
 # epoch -> "YYYY-MM-DD HH:MM" local wall clock.
@@ -244,13 +252,22 @@ is_after_hours() {  # <epoch> -> yes|no
 #     report a start time (unsupported ps, sandboxed pid namespace) the check
 #     is skipped rather than guessed, falling back to plain kill -0 - refusing
 #     to weaken the working case for a case that cannot be verified.
-#   - Reclaim race: two waiters can each decide the same lock is stale before
-#     either removes it; naive `rm -rf` from the delayed one would then delete
-#     whichever fresh lock the other waiter has since created at that path.
-#     tt_reclaim_stale renames the specific directory instance away before
-#     deleting it - `mv` is atomic, so only one racing reclaimer can ever move
-#     a given instance, and a directory recreated after the move is a
-#     different filesystem entry the move never touches.
+#   - Delete-wrong-instance race: deciding a lock is stale and then acting on
+#     it are two separate steps, so *anything* that only checks "is the path
+#     still what I inspected" right before deleting - including a plain
+#     `mv $TT_LOCK elsewhere` on the assumption that the move itself is the
+#     safety - is not enough: a plain `mv` relocates whatever currently sits
+#     at that path, not the specific instance a waiter inspected, so a
+#     successor's freshly created live lock at the same path would be moved
+#     and deleted just as readily as the stale one. tt_remove_locked_instance
+#     closes this for real by checking identity, not just path: it captures
+#     the directory's inode before acting, renames it aside, and only deletes
+#     the moved copy if its inode still matches what was captured - a
+#     mismatch means a different lock has since taken that path, so the moved
+#     copy is put back untouched instead of being deleted. The same helper is
+#     used by both a waiter reclaiming a lock it believes abandoned and an
+#     owner releasing a lock it confirmed is its own, since both are exactly
+#     this same "verify identity, then delete" problem.
 TT_LOCK="$TT/.lock"
 LOCK_STALE_SECS="${FM_TIME_LOCK_STALE_OVERRIDE:-10}"
 
@@ -258,37 +275,40 @@ tt_owner_start() {  # <pid> -> that pid's process-start timestamp, or nothing
   ps -o lstart= -p "$1" 2>/dev/null
 }
 
-# Atomically relocates a lock dir believed stale before removing it, so a
-# delayed reclaimer can never delete a lock a new owner has since created at
-# the same path (see the mutex comment above for the exact race this closes).
-tt_reclaim_stale() {
-  local reap="$TT_LOCK.reap.$$"
+tt_remove_locked_instance() {  # <expected-inode>
+  local expected=$1 reap="$TT_LOCK.reap.$$" got
   mv "$TT_LOCK" "$reap" 2>/dev/null || return 0
+  got=$(fm_time_inode "$reap" 2>/dev/null) || got=""
+  if [ -n "$expected" ] && [ "$got" != "$expected" ]; then
+    mv "$reap" "$TT_LOCK" 2>/dev/null || true
+    return 0
+  fi
   rm -rf "$reap" 2>/dev/null || true
 }
 
 tt_lock() {
   mkdir -p "$TT"
-  local tries=0 age owner_pid owner_start cur_start
+  local tries=0 age inode owner_pid owner_start cur_start
   while ! mkdir "$TT_LOCK" 2>/dev/null; do
+    inode=$(fm_time_inode "$TT_LOCK" 2>/dev/null) || inode=""
     owner_pid=$(cat "$TT_LOCK/pid" 2>/dev/null) || owner_pid=""
     if [ -n "$owner_pid" ]; then
       if ! kill -0 "$owner_pid" 2>/dev/null; then
-        tt_reclaim_stale
+        tt_remove_locked_instance "$inode"
         continue
       fi
       owner_start=$(cat "$TT_LOCK/start" 2>/dev/null) || owner_start=""
       if [ -n "$owner_start" ]; then
         cur_start=$(tt_owner_start "$owner_pid") || cur_start=""
         if [ -n "$cur_start" ] && [ "$cur_start" != "$owner_start" ]; then
-          tt_reclaim_stale
+          tt_remove_locked_instance "$inode"
           continue
         fi
       fi
     else
       age=$(fm_time_mtime "$TT_LOCK" 2>/dev/null) || age=""
       if [ -n "$age" ] && [ "$(( $(now_epoch) - age ))" -ge "$LOCK_STALE_SECS" ]; then
-        tt_reclaim_stale
+        tt_remove_locked_instance "$inode"
         continue
       fi
     fi
@@ -301,16 +321,21 @@ tt_lock() {
   trap tt_release_if_owner EXIT
 }
 
-# Removes the lock only if its recorded pid is still this process's own pid.
-# Used both as the ordinary unlock path and as the EXIT trap handler so a
-# signal arriving between tt_unlock's own removal and its `trap -` clear can
-# never blow away a lock a *different* command has since acquired: by the
-# time the trap fires, the pid file either matches this process (safe to
-# remove) or belongs to someone else / is already gone (leave it alone).
+# Removes the lock only if its recorded pid is still this process's own pid,
+# and even then only the exact instance just confirmed as this process's own
+# (see tt_remove_locked_instance above). Used both as the ordinary unlock
+# path and as the EXIT trap handler so a signal arriving between tt_unlock's
+# own removal and its `trap -` clear can never blow away a lock a *different*
+# command has since acquired: by the time the trap fires, the pid file either
+# matches this process (safe to remove) or belongs to someone else / is
+# already gone (leave it alone).
 tt_release_if_owner() {
-  local owner_pid
+  local owner_pid inode
   owner_pid=$(cat "$TT_LOCK/pid" 2>/dev/null) || owner_pid=""
-  [ "$owner_pid" = "$$" ] && rm -rf "$TT_LOCK" 2>/dev/null
+  if [ "$owner_pid" = "$$" ]; then
+    inode=$(fm_time_inode "$TT_LOCK" 2>/dev/null) || inode=""
+    tt_remove_locked_instance "$inode"
+  fi
   return 0
 }
 
