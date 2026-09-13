@@ -165,7 +165,17 @@ make_case() {
   printf 'codex\n' > "$home/config/crew-harness"
   fm_git_worktree "$proj" "$wt" "wt-$name"
   mkdir -p "$home/data/$id"
-  printf 'brief for %s\n' "$id" > "$home/data/$id/brief.md"
+  # fm-spawn.sh refuses a brief whose Task subsections are empty, so the fixture
+  # carries the real shape rather than a bare line. This suite is about the
+  # first-send gate, not brief validation; it only has to get past it.
+  cat > "$home/data/$id/brief.md" <<EOF
+# Task
+## Captain's intent
+brief for $id
+
+## Firstmate spec
+Exercise the first-send readiness gate against the fake backend.
+EOF
   touch "$home/state/.last-watcher-beat"
   printf '%s|%s|%s|%s|%s|%s|%s\n' \
     "$home" "$proj" "$wt" "$fakebin" "$case_dir/delivered" "$case_dir/delivery-count" \
