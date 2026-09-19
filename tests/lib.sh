@@ -466,6 +466,14 @@ fm_touch_epoch() {
     || fail "fm_touch_epoch: touch -t $stamp failed for $*"
 }
 
+# --- session-lock cohort signals --------------------------------------------
+#
+# tests/session-signals.sh owns the list and derives it from the library's own
+# tables; it is a separate file because the opt-in live guards need it without
+# any of this file's source-time side effects.
+# shellcheck source=tests/session-signals.sh
+. "$(dirname "${BASH_SOURCE[0]}")/session-signals.sh"
+
 # --- deterministic git identity and fixtures --------------------------------
 
 # fm_git_identity [name] [email]: export a fixed author/committer identity so
