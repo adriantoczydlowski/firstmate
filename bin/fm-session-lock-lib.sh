@@ -2,14 +2,14 @@
 # Shared session-lock harness identity.
 #
 # ONE owner of the "which verified-harness process holds this home's session
-# lock, and is the current process part of that same session?" decision.
-# bin/fm-lock.sh uses it to acquire and inspect state/.lock;
-# bin/fm-claude-stop-autoarm.sh and bin/fm-turnend-guard-cursor.sh use it to
-# prove a turn-end hook fires inside the lock-owning primary session before it
-# may arm or rewake.
+# lock, and does the current process run inside that same session?" decision.
+# bin/fm-lock.sh uses it to acquire and inspect state/.lock and its
+# state/.lock-session sidecar; bin/fm-claude-stop-autoarm.sh and
+# bin/fm-turnend-guard-cursor.sh use it to prove a turn-end hook fires inside
+# the lock-owning primary session before it may arm or rewake.
 # This file is sourced by scripts and has no side effects on source.
 #
-# Two independent kinds of same-session evidence are accepted, because the
+# Three independent kinds of same-session evidence are accepted, because the
 # process tree alone is not the session:
 #
 #   Ancestry (below): the lock names a process in this one's contiguous
@@ -23,15 +23,31 @@
 #   lock - a background session rehosted under its own pty reparents to init -
 #   and ancestry then reports one genuine session as two competing ones.
 #
-# Neither kind vetoes the other: each is a positive proof on its own, and the
-# absence of cohort evidence leaves the ancestry verdict exactly as it was.
-# Within the cohort proof the signals are AND-ed, not OR-ed, because the one
-# property that must survive is that a genuinely separate concurrent session is
-# still refused.
+#   Trusted session id (further below still): the Claude session id this process
+#   proves it belongs to matches the id recorded beside a live lock in
+#   state/.lock-session. The id is the one identity that survives a recycled
+#   background bridge, where the contiguous claude-named ancestry from a hook to
+#   the recorded owner breaks while the owner pid stays alive.
 #
-# The cohort proof is per-harness and currently reaches only Claude; every other
-# adapter is decided by ancestry alone. FM_SESSION_LAUNCH_MARKERS below owns that
-# scope limit, why it is safe, and what extending it requires.
+# Ancestry is never vetoed: each further kind is a positive proof on its own,
+# and the absence of cohort or id evidence leaves the ancestry verdict exactly
+# as it was. Neither ever fails open - no id, no sidecar, an untrusted id, a
+# different recorded id, or a dead recorded pid all leave that verdict
+# unchanged. The two further kinds do interact in one direction: when the lock
+# records a session id and this process presents one the id proof still refuses,
+# that refusal is final and the cohort proof is not consulted after it, because
+# the launch marker it would read is a second field of the very environment
+# block the refused id came from. A lock with no recorded id has no identity to
+# weigh and leaves the cohort proof free. Within the cohort
+# proof the signals are AND-ed, not OR-ed, and the id proof is gated on an
+# environment proven to belong to the current run, because the one property
+# that must survive is that a genuinely separate concurrent session is still
+# refused.
+#
+# Both the cohort and the id proof are per-harness and currently reach only
+# Claude; every other adapter is decided by ancestry alone.
+# FM_SESSION_LAUNCH_MARKERS below owns that scope limit for the cohort proof,
+# why it is safe, and what extending it requires.
 
 # Cursor process identity is NOT expressible as a command-name pattern and is
 # deliberately not added to the tables below: Cursor's installed names are
@@ -426,19 +442,24 @@ fm_harness_ancestry_pids() {
   [ "$printed" -eq 1 ]
 }
 
-# Print the one pid that identifies this session when the session lock is being
-# WRITTEN: the outermost pid of the contiguous run. That is the pid that lives as
-# long as the session - a Claude worker several levels in is reaped when its hook
-# returns, and a lock naming it would look stale moments later while the session
-# is still running. Every non-Claude harness reports a single pid, so this is its
-# innermost match unchanged.
+# Print the outermost pid of this session's contiguous harness run for callers
+# that need that ancestry identity. This is not necessarily the pid written to
+# the session lock: fm_session_lock_anchor_pid owns that choice and uses a
+# trusted Claude session's model-loop pid instead. Every non-Claude harness
+# reports a single pid, so this remains its innermost match unchanged.
 fm_harness_ancestry_pid() {
-  local pids pid outermost=''
+  local pids
   pids=$(fm_harness_ancestry_pids) || return 1
+  _fm_harness_outermost_pid "$pids"
+}
+
+# Print the last (outermost) pid of ancestry list $1, or return 1 when empty.
+_fm_harness_outermost_pid() {  # <ancestry-pids>
+  local pid outermost=''
   while IFS= read -r pid; do
     [ -n "$pid" ] && outermost=$pid
   done <<EOF
-$pids
+$1
 EOF
   [ -n "$outermost" ] || return 1
   printf '%s\n' "$outermost"
@@ -843,6 +864,7 @@ fm_session_same_cohort() {  # <pid> [<ancestry-pids>] [<holder-alive-verified>]
   # it, which would let a second, genuinely separate session take this home.
   kind=$(fm_harness_pid_kind "$pid" 2>/dev/null || true)
   fm_session_launch_marker_exists "$kind" || return 1
+
   while IFS= read -r member; do
     [ -n "$member" ] || continue
     if [ "$(fm_harness_pid_kind "$member" 2>/dev/null || true)" = "$kind" ]; then
@@ -1000,8 +1022,14 @@ fm_harness_pid_suspended() {  # <pid>
 # owner of the statement of it rather than this one repeating it.
 # shellcheck disable=SC2034 # Read by bin/fm-lock.sh to report why it did not yield.
 FM_SESSION_HOLDER_YIELD_REASON=
-fm_session_lock_holder_competes() {  # <pid>
-  local pid=$1 state
+#
+# $2 is the state dir whose lock $1 was read from, and it is what lets the same
+# fm_session_lock_id_pair_refused gate the ownership decider applies reach the
+# cohort clause below. Every caller that reads a real lock passes it; a caller
+# asking only about a pid may omit it and gets the pre-session-id reading, which
+# is identical whenever the lock carries no recorded id.
+fm_session_lock_holder_competes() {  # <pid> [<state>]
+  local pid=$1 lock_state=${2:-} state
   FM_SESSION_HOLDER_YIELD_REASON=
   state=$(fm_harness_pid_state "$pid")
   if [ "$state" = gone ]; then
@@ -1012,7 +1040,7 @@ fm_session_lock_holder_competes() {  # <pid>
     FM_SESSION_HOLDER_YIELD_REASON="reclaimed from pid $pid, which is alive but not recognised as a harness"
     return 1
   fi
-  if fm_session_same_cohort "$pid" '' 1; then
+  if ! fm_session_lock_id_pair_refused "$lock_state" && fm_session_same_cohort "$pid" '' 1; then
     FM_SESSION_HOLDER_YIELD_REASON="converged onto this session's own holder pid $pid ($FM_SESSION_COHORT_EVIDENCE)"
     return 1
   fi
@@ -1024,40 +1052,193 @@ fm_session_lock_holder_competes() {  # <pid>
   return 0
 }
 
+# --- trusted same-session identity -------------------------------------------
+# Claude Code hands every hook and tool shell CLAUDE_CODE_SESSION_ID (the
+# session's conversation id) and CLAUDE_PID (the pid of the process running the
+# model loop). A background session runs that model loop in a transient helper
+# bridged to its front-end by a shared daemon, and when that bridge is recycled
+# the contiguous claude-named ancestry from a hook to the recorded lock owner
+# breaks while the owner pid stays alive, so ancestry alone reads the session's
+# own lock as another live session's. The id is the one identity that survives
+# the recycling, so it is accepted as a second ownership signal - but only from
+# an environment proven to belong to the current Claude run.
+#
+# Trust gate: CLAUDE_PID must be a Claude-shaped member of this process's
+# contiguous harness ancestry. An id merely retained in a helper environment
+# fails that membership and is ignored: a hand-started Pi or codex primary under
+# a Claude pane still carries the pane's CLAUDE_CODE_SESSION_ID and CLAUDE_PID,
+# and must never own a lock with them. Ids are read from the environment only,
+# never from ps argv, where prompts and briefs are visible.
+#
+# A --fork-session successor mints a new id, so it stays a foreign live owner
+# until the pre-fork process exits; that is the safe direction and a documented
+# non-goal. Two genuinely different live sessions sharing one id is not a
+# supported state (Claude refuses to resume a running session under its id).
+
+# Print the Claude session id this process may own with, or return 1. $1 is the
+# ancestry list an earlier walk already produced, so a caller that walked once
+# need not walk again.
+fm_session_lock_trusted_session_id() {  # [<ancestry-pids>]
+  local id=${CLAUDE_CODE_SESSION_ID:-} claude_pid=${CLAUDE_PID:-} pids=${1:-} pid comm args
+  [ -n "$id" ] || return 1
+  case "$id" in *$'\n'*|*$'\r'*) return 1 ;; esac
+  case "$claude_pid" in ''|*[!0-9]*) return 1 ;; esac
+  if [ -z "$pids" ]; then
+    pids=$(fm_harness_ancestry_pids) || return 1
+  fi
+  while IFS= read -r pid; do
+    [ "$pid" = "$claude_pid" ] || continue
+    comm=$(ps -o comm= -p "$pid" 2>/dev/null) || return 1
+    args=$(ps -o args= -p "$pid" 2>/dev/null)
+    fm_harness_process_matches "$comm" "$args" || return 1
+    [ "$FM_HARNESS_IS_CLAUDE" -eq 1 ] || return 1
+    printf '%s\n' "$id"
+    return 0
+  done <<EOF
+$pids
+EOF
+  return 1
+}
+
+# Print the session id recorded beside the lock in state dir $1, or return 1.
+# bin/fm-lock.sh is the only writer of state/.lock-session; a missing,
+# symlinked, unreadable, or empty sidecar, or one whose first line contains a
+# newline or carriage return, is simply no recorded id.
+fm_session_lock_recorded_session_id() {  # <state>
+  local state=$1 recorded
+  [ -f "$state/.lock-session" ] && [ ! -L "$state/.lock-session" ] || return 1
+  recorded=$(head -n 1 "$state/.lock-session" 2>/dev/null) || return 1
+  [ -n "$recorded" ] || return 1
+  case "$recorded" in *$'\n'*|*$'\r'*) return 1 ;; esac
+  printf '%s\n' "$recorded"
+}
+
+# True when the lock in state dir $1 was recorded by this same Claude session:
+# the trusted id equals the id recorded beside the lock. No trusted id, no
+# sidecar, or a different recorded id is false.
+fm_session_lock_same_session() {  # <state> [<ancestry-pids>]
+  local state=$1 trusted recorded
+  trusted=$(fm_session_lock_trusted_session_id "${2:-}") || return 1
+  recorded=$(fm_session_lock_recorded_session_id "$state") || return 1
+  [ "$recorded" = "$trusted" ]
+}
+
+# True when the session-id pair has already REFUSED this process's ownership of
+# the lock in state dir $1: this process presents a Claude session id, the lock
+# records one, and fm_session_lock_same_session above still says they are not
+# the same session.
+#
+# That pair is the harness's own session identity weighed against the identity
+# recorded beside the lock, and it is strictly better evidence than the cohort
+# proof's launch marker, which is a second field of the very environment block
+# the failed id came from. Consulting the marker after the id was refused would
+# walk straight around fm_session_lock_trusted_session_id's gate, so the two
+# ownership deciders below skip the cohort proof exactly here.
+#
+# The gate is keyed on the RECORDED id, never on the presented one alone: a lock
+# with no sidecar has no identity to weigh, so an id this process merely carries
+# refuses nothing and leaves the cohort proof free. That is what keeps a
+# sidecar-free lock - every lock written before this session-id path existed, and
+# every lock written by a session that proved no trusted id - decided exactly as
+# it was.
+fm_session_lock_id_pair_refused() {  # <state> [<ancestry-pids>]
+  local state=${1:-}
+  [ -n "$state" ] || return 1
+  [ -n "${CLAUDE_CODE_SESSION_ID:-}" ] || return 1
+  fm_session_lock_recorded_session_id "$state" >/dev/null || return 1
+  fm_session_lock_same_session "$state" "${2:-}" && return 1
+  return 0
+}
+
+# Print the pid bin/fm-lock.sh records on lock line 1 for this session. For a
+# Claude session with a trusted id that is CLAUDE_PID, the model-loop process:
+# never the shared transient daemon and never a front-end that outlives the
+# session, so "recorded pid dead" keeps meaning "session gone" instead of
+# wedging a home behind a live daemon whose session died. A replaced background
+# helper leaves a dead pid that its own session's next hook reclaims, because
+# the sidecar still names that session. Every other session records the
+# outermost pid of its contiguous run, exactly as before.
+fm_session_lock_anchor_pid() {
+  local pids
+  pids=$(fm_harness_ancestry_pids) || return 1
+  if fm_session_lock_trusted_session_id "$pids" >/dev/null; then
+    printf '%s\n' "$CLAUDE_PID"
+    return 0
+  fi
+  _fm_harness_outermost_pid "$pids"
+}
+
+# True when state dir $1's lock is this session's own AND line 1 must be left
+# exactly as recorded. Two proofs qualify: the recorded pid is a member of this
+# process's contiguous harness ancestry, or the lock carries this same trusted
+# Claude session id and its recorded pid is still a live harness.
+#
+# Both name a pid this session still reaches through the process tree, so
+# bin/fm-lock.sh confirms them in place rather than converging line 1 onto its
+# own anchor: bin/fm-startup-network.sh compares that pid across its deferred
+# sweeps, and rewriting it would abandon work no other session had claimed. The
+# same-session proof requires the recorded pid alive so that a dead one is
+# reclaimed through the ordinary stale-owner path, which refreshes line 1,
+# rather than being silently owned with a dead anchor.
+#
+# The session-cohort proof above is deliberately NOT one of them, and is the
+# only ownership proof fm_session_lock_owned_by_self accepts beyond these two:
+# a cohort holder sits in a separate process tree that ancestry-based readers
+# cannot reach, so converging line 1 onto this session's own anchor is what
+# makes a repeated acquisition idempotent there.
+fm_session_lock_owned_in_place() {  # <state> [<ancestry-pids>]
+  local state=$1 lock_pid pids=${2:-} pid
+  lock_pid=$(cat "$state/.lock" 2>/dev/null || true)
+  case "$lock_pid" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  if [ -z "$pids" ]; then
+    pids=$(fm_harness_ancestry_pids) || return 1
+  fi
+  while IFS= read -r pid; do
+    [ "$pid" = "$lock_pid" ] && return 0
+  done <<EOF
+$pids
+EOF
+  fm_session_lock_same_session "$state" "$pids" || return 1
+  fm_harness_pid_alive "$lock_pid"
+}
+
 # True when state dir $1 holds a session lock this process's own session owns.
 #
 # Ancestry membership is the primary proof, and is the honest test for it,
 # because the lock owner sits at an unknown depth in a contiguous Claude run -
 # it is the outermost pid when the hook fires inside the session's own nested
 # worker chain, and an inner pid when a harness-named daemon parents the session.
-# When the lock names a harness OUTSIDE that ancestry, the session-cohort proof
-# above decides, which is what keeps a session whose work the harness moved into
-# a separate process tree from reporting itself as a competitor.
+# When the lock names a harness OUTSIDE that ancestry, two further proofs decide,
+# each sufficient on its own: the trusted same-session id recorded beside a live
+# lock, and the session-cohort proof above, which is what keeps a session whose
+# work the harness moved into a separate process tree from reporting itself as a
+# competitor.
 #
 # A missing lock, a malformed lock, an ancestry that cannot be resolved, and a
-# lock held by a harness that is neither an ancestor nor in this session's
-# cohort all still fail closed. Requiring a resolvable ancestry before the
-# cohort proof is deliberate: ownership stays a claim only a harness session can
-# make, never one an ordinary script sharing the captain's terminal can make.
+# lock held by a live harness that is neither an ancestor, nor recorded under
+# this session's id, nor in this session's cohort all still fail closed.
+# Requiring a resolvable ancestry before either further proof is deliberate:
+# ownership stays a claim only a harness session can make, never one an ordinary
+# script sharing the captain's terminal can make.
 fm_session_lock_owned_by_self() {
-  local state=$1 lock_pid pids pid
+  local state=$1 lock_pid pids
   lock_pid=$(cat "$state/.lock" 2>/dev/null || true)
   case "$lock_pid" in
     ''|*[!0-9]*) return 1 ;;
   esac
   pids=$(fm_harness_ancestry_pids) || return 1
-  while IFS= read -r pid; do
-    [ "$pid" = "$lock_pid" ] && return 0
-  done <<EOF
-$pids
-EOF
+  fm_session_lock_owned_in_place "$state" "$pids" && return 0
+  fm_session_lock_id_pair_refused "$state" "$pids" && return 1
   fm_session_same_cohort "$lock_pid" "$pids"
 }
 
 # True when state dir $1 records a live verified harness outside this process's
-# contiguous harness ancestry. Sets FM_SESSION_LOCK_FOREIGN_OWNER_PID for a
-# diagnostic caller. Malformed, missing, dead, and ancestry-uncertain locks are
-# not foreign-owner evidence.
+# contiguous harness ancestry that was not recorded by this same trusted Claude
+# session. Sets FM_SESSION_LOCK_FOREIGN_OWNER_PID for a diagnostic caller.
+# Malformed, missing, dead, and ancestry-uncertain locks are not foreign-owner
+# evidence.
 # shellcheck disable=SC2034 # Output global, read by the sourcing guard caller.
 FM_SESSION_LOCK_FOREIGN_OWNER_PID=
 fm_session_lock_foreign_owner_live() {
@@ -1075,6 +1256,7 @@ fm_session_lock_foreign_owner_live() {
   done <<EOF
 $pids
 EOF
+  fm_session_lock_same_session "$state" "$pids" && return 1
   # shellcheck disable=SC2034 # Output global, read by the sourcing guard caller.
   FM_SESSION_LOCK_FOREIGN_OWNER_PID=$lock_pid
   return 0
