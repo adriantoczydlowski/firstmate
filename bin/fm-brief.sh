@@ -105,7 +105,7 @@ WAIT_ON_CAPTAIN_TAG=${FM_CLASSIFY_WAIT_ON_CAPTAIN_TAG:-$FM_CLASSIFY_WAIT_ON_CAPT
 # status_wait_on_captain owns what it means; this only tells a worker when to
 # write it, because a supervisor cannot tell a wait on the captain from a wait on
 # the world by reading the wait's prose.
-CREWMATE_PAUSE_ON_CAPTAIN="When the only thing that can end the wait is the captain's own act - their answer, their merge word, their design pick - write it as \`$PAUSED_VERB $WAIT_ON_CAPTAIN_TAG: {why}\`, and firstmate stops rechecking a wait nobody but the captain can end."
+CREWMATE_PAUSE_ON_CAPTAIN="When the captain already holds the work and only their own act can end the wait - a project they deferred, a hold they took, a merge word they owe - write it as \`$PAUSED_VERB $WAIT_ON_CAPTAIN_TAG: {why}\`, and firstmate stops rechecking a wait nobody but the captain can end. A decision you have not yet asked is not such a wait: append \`needs-decision [at=<epoch>]: {summary of options}\` for it instead, so it stays open until it is answered."
 
 resolve_directory_input() {
   local name=$1 path=$2 resolved

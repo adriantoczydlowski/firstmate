@@ -1364,7 +1364,7 @@ handle_paused_stale() {  # <window> <task> <hash>
   last=$(last_status_line "$statusf")
   min_age=$PAUSE_RESURFACE_SECS
   cadence=$PAUSE_RESURFACE_SECS
-  declaration="declared:$(fm_wake_signal_sig "$statusf" || true)"
+  declaration=$(status_wait_declaration_scope "$statusf")
   if status_wait_on_captain "$last"; then
     if afk_record_present; then
       triage_log "absorbed stale (wait on the captain, not surfaced while the away-posture record exists): $win"
@@ -1594,7 +1594,7 @@ task_captain_call_open() {  # <task>
 # blocker - changes it and so starts its own window instead of inheriting the
 # silence of the one before it.
 stale_wait_declaration() {  # <task>
-  printf 'declared:%s' "$(fm_wake_signal_sig "$STATE/$1.status" || true)"
+  status_wait_declaration_scope "$STATE/$1.status"
 }
 
 # The same scope for a captain call, carrying the CALL's own lifecycle identity

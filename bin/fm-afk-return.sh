@@ -476,6 +476,11 @@ render_return_brief() {  # <evidence-file> <blockers-file> <since-epoch>
     done <<EOF
 $(status_open_decisions "$status")
 EOF
+    last=$(last_status_line "$status")
+    if status_wait_on_captain "$last" && ! status_is_captain_held "$last"; then
+      count=$((count + 1))
+      printf '  - %s waits on you, not rechecked while you were away: %s\n' "$task" "$(printf '%s' "$last" | clean_field)"
+    fi
   done
   rows=$(printf '%s\n' "$STORE_ROWS" | awk -F '\t' '$3 == "captain" { printf "  - %s: %s\n", $2, $5 }')
   if [ -n "$rows" ]; then

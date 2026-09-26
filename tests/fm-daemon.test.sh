@@ -1007,6 +1007,83 @@ test_housekeeping_wait_on_captain_is_never_rechecked() {
   pass "housekeeping never rechecks a wait on the captain while an external wait on the same tick still does"
 }
 
+# The one sighting a wait a WORKER declared on the captain is owed under quiet
+# mode. Its declaration reaches the daemon as a routine paused signal, which it
+# self-handles, and housekeeping never rechecks it, so without a first sight the
+# captain would hear of it only after /quiet off. Driven through the wake
+# handler: the signal that declares it escalates exactly once, the stale wake
+# that follows and an overdue housekeeping tick add nothing, a re-declaration
+# earns its own single sighting, the away posture stays silent (the return brief
+# lists it), a declaration the always-on watcher already surfaced is not
+# repeated, and a captain-held transfer - firstmate's own append - is not
+# surfaced here at all.
+test_wait_on_captain_first_sight_escalates_once_under_quiet_mode() {
+  local dir state fakebin task win pane key watcher_key statusf n
+  dir=$(make_supercase quiet-first-sight)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  task=held-w16; win="sess:fm-$task"; pane="$dir/pane.txt"; statusf="$state/$task.status"
+  key=$(printf '%s' "$task" | tr ':/.' '___')
+  watcher_key=$(printf '%s' "$win" | tr ':/.' '___')
+  fm_write_meta "$state/$task.meta" "window=$win" "worktree=$dir/wt" "kind=ship" "harness=pi"
+  printf 'idle prompt $\n' > "$pane"
+  afk_enter "$state"
+  escalations() { [ -s "$state/.subsuper-escalations" ] && wc -l < "$state/.subsuper-escalations" | tr -d ' ' || echo 0; }
+
+  printf 'paused [on=captain]: awaiting the captain on the merge word\n' > "$statusf"
+  FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 handle_wake "signal: $statusf" "$state"
+  n=$(escalations)
+  [ "$n" = 1 ] || fail "the declaring signal produced $n escalation(s), expected the one first sight: $(cat "$state/.subsuper-escalations" 2>/dev/null || true)"
+  grep -F "awaiting the captain" "$state/.subsuper-escalations" >/dev/null \
+    || fail "the first sight does not name the captain as the one who must act: $(cat "$state/.subsuper-escalations")"
+  grep -F "awaiting external" "$state/.subsuper-escalations" >/dev/null \
+    && fail "the first sight was worded as an external wait"
+  grep -F "possible wedge" "$state/.subsuper-escalations" >/dev/null \
+    && fail "the first sight was worded as a possible wedge"
+  [ -e "$state/.subsuper-paused-$key" ] || fail "the declaring signal did not record the pause marker"
+
+  FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 handle_wake "stale: $win" "$state"
+  n=$(escalations)
+  [ "$n" = 1 ] || fail "the stale wake after the first sight escalated again ($n escalations)"
+
+  echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
+  n=$(escalations)
+  [ "$n" = 1 ] || fail "an overdue housekeeping tick rechecked the wait ($n escalations): $(cat "$state/.subsuper-escalations")"
+
+  printf 'paused [on=captain]: awaiting the captain on the design pick\n' >> "$statusf"
+  FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 handle_wake "signal: $statusf" "$state"
+  n=$(escalations)
+  [ "$n" = 2 ] || fail "a re-declaration did not earn its own single sighting ($n escalations)"
+  FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 handle_wake "stale: $win" "$state"
+  n=$(escalations)
+  [ "$n" = 2 ] || fail "the stale wake after a re-declaration escalated again ($n escalations)"
+
+  : > "$state/.afk-contract"
+  printf 'paused [on=captain]: awaiting the captain on the release\n' >> "$statusf"
+  FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 handle_wake "signal: $statusf" "$state"
+  FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 handle_wake "stale: $win" "$state"
+  n=$(escalations)
+  [ "$n" = 2 ] || fail "a wait declared under the away posture was surfaced instead of left to the return brief ($n escalations)"
+  rm -f "$state/.afk-contract"
+
+  printf '%s' "$(status_wait_declaration_scope "$statusf")" > "$state/.paused-resurfaced-$watcher_key"
+  FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 handle_wake "stale: $win" "$state"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
+  n=$(escalations)
+  [ "$n" = 2 ] || fail "a declaration the always-on watcher already surfaced was repeated ($n escalations)"
+
+  fm_write_meta "$state/held-w16h.meta" "window=sess:fm-held-w16h" "worktree=$dir/wt" "kind=ship" "harness=pi"
+  printf 'captain-held [key=route]: tracked by task-decision-route\n' > "$state/held-w16h.status"
+  FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 handle_wake "signal: $state/held-w16h.status" "$state"
+  FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 handle_wake "stale: sess:fm-held-w16h" "$state"
+  n=$(escalations)
+  [ "$n" = 2 ] || fail "a captain-held transfer was surfaced as a first sight ($n escalations): $(cat "$state/.subsuper-escalations")"
+  unset -f escalations
+  pass "a wait declared on the captain is escalated exactly once per declaration under quiet mode and never under the away posture"
+}
+
 # A crew that RESUMED - whose latest status line no longer declares the wait - drops
 # its pause tracking without escalating. The dimension pinned here is that pane busy
 # state does not GATE that clear: the status append alone ends the wait, on the
@@ -2832,6 +2909,7 @@ test_housekeeping_persistent_stale_escalates
 test_housekeeping_resumed_stale_cleared
 test_housekeeping_paused_resurfaces_and_resets
 test_housekeeping_wait_on_captain_is_never_rechecked
+test_wait_on_captain_first_sight_escalates_once_under_quiet_mode
 test_housekeeping_paused_resumed_cleared
 test_housekeeping_busy_declared_wait_matures_its_window
 test_housekeeping_declared_time_controls_pause_recheck

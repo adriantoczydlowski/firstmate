@@ -309,6 +309,16 @@ status_wait_on_captain() {  # <status-line>
   return 1
 }
 
+# The scope a declared wait's sighting is recorded against: the declaring status
+# file's observed signature, so an unchanged declaration is one scope however its
+# pane churns and a re-declaration is a new one. bin/fm-watch.sh keys its
+# .paused-resurfaced-<key> throttle to it, and bin/fm-supervise-daemon.sh reads
+# and writes that same throttle for a wait on the captain, so the one sighting
+# such a wait is owed is one sighting across both supervisors.
+status_wait_declaration_scope() {  # <status-file>
+  printf 'declared:%s' "$(status_observed_signature "$1" || true)"
+}
+
 # A condition-aware declared wait: a `paused:` line may say WHEN it expects to
 # clear with `until <YYYY-MM-DDTHH:MM[:SS]Z>` anywhere in its text (UTC only, so
 # no local-zone guess is ever recorded). Prints that time as epoch seconds so a

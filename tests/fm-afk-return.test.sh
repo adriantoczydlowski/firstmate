@@ -708,6 +708,35 @@ test_return_brief_without_a_record_reports_the_legacy_flag() {
   pass "a return with only the legacy away flag still renders the brief and measures the window from the flag"
 }
 
+# A wait a worker declared on the captain while the away-posture record existed
+# is silenced by every watcher path and by daemon housekeeping, so the return
+# brief is the one place it can reach the captain: "Waiting on you" lists it,
+# keyed by task, while an ordinary external wait beside it stays out of that
+# section and a captain-held transfer is carried by its held backlog row alone.
+test_return_brief_lists_a_wait_declared_on_the_captain() {
+  local dir out waiting
+  dir="$TMP_ROOT/brief-wait-on-captain"
+  install_runner "$dir"
+  contract_in "$dir" propose --words 'hold the merge word until I am back' \
+    --action merge --object 'task parked PR' --when 'checks green' >/dev/null 2>&1 || fail "could not propose the away-posture record"
+  contract_in "$dir" confirm >/dev/null 2>&1 || fail "could not confirm the away-posture record"
+  printf 'window=synthetic:fm-parked\nbackend=tmux\nkind=ship\n' > "$dir/home/state/parked.meta"
+  printf 'working: PR opened\npaused [on=captain]: awaiting the captain on the merge word\n' > "$dir/home/state/parked.status"
+  printf 'window=synthetic:fm-vendor\nbackend=tmux\nkind=ship\n' > "$dir/home/state/vendor.meta"
+  printf 'paused: holding for the upstream tool release\n' > "$dir/home/state/vendor.status"
+  printf 'window=synthetic:fm-handed\nbackend=tmux\nkind=ship\n' > "$dir/home/state/handed.meta"
+  printf 'captain-held [key=route]: tracked by task-decision-route\n' > "$dir/home/state/handed.status"
+  touch "$dir/home/state/.last-watcher-beat"
+  : > "$dir/home/state/.fake-drain"
+  out=$(run_return "$dir" begin) || fail "a return with no blockers should clear: $out"
+  waiting=$(printf '%s\n' "$out" | awk '/^Waiting on you:/{show=1} /^Tried and failed, or could not be fixed:/{show=0} show')
+  assert_contains "$waiting" '- parked waits on you, not rechecked while you were away: paused [on=captain]: awaiting the captain on the merge word' "the wait declared on the captain was not listed under waiting on you: $out"
+  assert_not_contains "$waiting" 'vendor' "an external wait was listed as waiting on the captain"
+  assert_not_contains "$waiting" 'handed' "a captain-held transfer was listed from its status line beside its backlog row"
+  assert_not_contains "$waiting" '(nothing)' "the section reported nothing while a wait on the captain stood"
+  pass "the return brief lists a wait declared on the captain under waiting on you"
+}
+
 
 
 test_unreadable_superseded_archive_keeps_return_gated() {
@@ -804,3 +833,4 @@ test_return_guard_refuses_while_the_record_exists
 test_return_brief_health_leads_with_a_gap
 test_return_brief_does_not_report_an_acked_watcher_down_marker_as_a_gap
 test_return_brief_without_a_record_reports_the_legacy_flag
+test_return_brief_lists_a_wait_declared_on_the_captain
