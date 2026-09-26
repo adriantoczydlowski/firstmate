@@ -49,9 +49,10 @@
 #     fm-classify-lib.sh's combined predicate - instead gets its own longer
 #     PAUSE_RESURFACE_SECS recheck, never a wedge escalation, whether its pane
 #     reads idle or busy; only a status append that stops declaring the wait
-#     ends that routing. A captain-held transfer is not rechecked at all while
-#     the away-posture record (state/.afk-contract) exists: nobody is there to
-#     answer it, and the return brief lists it.
+#     ends that routing. A wait on the captain - a captain-held transfer, or a
+#     paused: line carrying the wait-owner marker - is not rechecked at all, in
+#     either posture: only the captain can end it, so a recheck can report
+#     nothing but that they have not ended it yet.
 #     Crewmates are autonomous, so a delayed stale response does not stall a
 #     healthy crewmate's own progress.
 #     Buffered escalation delivery also has a max-defer alarm: if a digest stays
@@ -99,8 +100,7 @@
 #                                   idle or busy, before it re-surfaces as a
 #                                   recheck (default 14400, four hours); an
 #                                   `until` time cannot extend this bound, and a
-#                                   captain-held transfer is never rechecked
-#                                   while the away-posture record exists
+#                                   wait on the captain is never rechecked at all
 #          FM_ESCALATE_BATCH_SECS   buffer window for batched escalation
 #                                   digests; 0 = flush immediately (default 90)
 #          FM_HEARTBEAT_SCAN_SECS   cadence for the catch-all status scan
@@ -1086,12 +1086,17 @@ housekeeping() {  # <state>
   # (2b) pause re-surface recheck. A declared wait is waiting, not wedged (fm-classify-lib.sh's
   # status_is_paused_or_captain_held owns which declarations qualify), so it is
   # rechecked on a much longer cadence than a wedge (PAUSE_RESURFACE_SECS) and never
-  # escalated as one - but it MUST re-surface, so neither a forgotten pause nor a
-  # forgotten captain hold can rot invisibly. Past the window: gone -> drop; still
-  # declaring the wait -> escalate a recheck digest and reset the marker so the window
-  # repeats. The digest names WHICH human the wait is on, because the captain is the
-  # one reading it: an external dependency for a paused: declaration, and the captain
-  # themself for a verified hold transfer.
+  # escalated as one - but it MUST re-surface, so a forgotten pause cannot rot
+  # invisibly. Past the window: gone -> drop; still declaring the wait -> escalate a
+  # recheck digest and reset the marker so the window repeats. The digest names the
+  # external dependency the wait is on, because the captain is the one reading it.
+  # A wait on the captain (status_wait_on_captain) has no recheck here at all, in
+  # either posture: only the captain can end it, so a recheck can report nothing
+  # but that they have not ended it yet. Under the away posture the return brief
+  # carries it; under quiet mode, where no posture record exists, the captain is
+  # present and already holds the work. This is the same rule the always-on
+  # watcher applies (bin/fm-watch.sh), so the two supervisors cannot disagree
+  # about which waits get a cadence.
   # Pane busy state does NOT end the wait. A declared wait can legitimately hold a
   # pane busy - a worker parked on a long foreground call it keeps live for as long
   # as the wait lasts - so reading busy as "the crew resumed" retires the window of
@@ -1118,7 +1123,7 @@ housekeeping() {  # <state>
     due="$state/.subsuper-pause-until-due-$key"
     until=
     bounded_until=0
-    if status_is_captain_held "$last" && fm_afk_contract_present "$state"; then
+    if status_wait_on_captain "$last"; then
       continue
     fi
     if until=$(status_paused_until "$last"); then
@@ -1143,10 +1148,11 @@ housekeeping() {  # <state>
       2) rm -f "$marker" ;;
       *)
         last=$(last_status_line "$state/$task.status")
-        if [ -n "$last" ] && status_is_captain_held "$last"; then
-          if escalate_add "$state" "captain-held ${age}s (awaiting the captain, answer the held decision or release the hold): $win"; then
-            _now > "$marker"
-          fi
+        # Re-read after the endpoint probe: the crew may have replaced its
+        # declaration in between, and a wait that now names the captain is owed
+        # no recheck however long its marker has aged.
+        if [ -n "$last" ] && status_wait_on_captain "$last"; then
+          continue
         elif [ -n "$last" ] && status_is_paused "$last"; then
           if [ "$bounded_until" -eq 1 ]; then
             pause_reason="paused ${age}s (awaiting external, the declared time is beyond the recheck cadence; confirm the wait still holds): $win"

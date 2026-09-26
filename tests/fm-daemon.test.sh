@@ -966,31 +966,45 @@ test_housekeeping_paused_resurfaces_and_resets() {
   pass "housekeeping re-surfaces a stale declared pause on the long cadence and resets its window"
 }
 
-# The other half of quieting a captain-held task: it must NOT be silenced outright.
-# fm-classify-lib.sh's cadence comment is explicit that a forgotten hold cannot rot
-# invisibly, so a held task re-surfaces on the same bounded window as a pause, with
-# its marker reset so the window repeats instead of firing once. The digest the
-# captain reads must also name the captain rather than an external dependency: the
-# hold is waiting on the one person reading the digest, so borrowing the pause verb's
-# awaiting-external wording would point them away from being the blocker.
-test_housekeeping_captain_held_resurfaces_and_resets() {
-  local dir state fakebin win pane key age
-  dir=$(make_supercase captain-held-resurface)
-  state="$dir/state"; fakebin="$dir/fakebin"
-  win="sess:fm-held-w11h"; pane="$dir/pane.txt"
-  printf 'captain-held [key=route]: tracked by task-decision-route\n' > "$state/held-w11h.status"
-  printf 'idle prompt $\n' > "$pane"
-  key=$(printf '%s' "held-w11h" | tr ':/.' '___')
-  echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$key"
-  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
-    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
-  grep -F "awaiting the captain" "$state/.subsuper-escalations" >/dev/null 2>&1 || fail "a captain hold was silenced entirely instead of re-surfacing as a captain-owned recheck: $(cat "$state/.subsuper-escalations" 2>/dev/null || true)"
-  grep -F "awaiting external" "$state/.subsuper-escalations" >/dev/null 2>&1 && fail "a captain hold was re-surfaced as an external wait, hiding that the captain is the blocker"
-  grep -F "possible wedge" "$state/.subsuper-escalations" >/dev/null 2>&1 && fail "a captain hold was re-surfaced as a possible wedge"
-  [ -e "$state/.subsuper-paused-$key" ] || fail "captain-held marker cleared instead of reset for the next window"
-  age=$(( $(date +%s) - $(cat "$state/.subsuper-paused-$key" 2>/dev/null || echo 0) ))
-  [ "$age" -lt 60 ] || fail "captain-held marker was not reset to now on re-surface (age ${age}s)"
-  pass "housekeeping re-surfaces a forgotten captain hold on the long cadence and resets its window"
+# The other half of quieting a wait the CAPTAIN owns: the daemon must reach the
+# same answer as the always-on watcher, or a home would get one cadence while it
+# is away or quiet and another while it is attended. A recheck asks whether a
+# wait still holds, and the only thing that can end this one is the captain's own
+# act, so there is nothing to ask and the window never matures. Both shapes are
+# driven here, and the external pause beside them still rechecks on the same tick,
+# so the silence is the rule rather than a housekeeping pass that did nothing.
+test_housekeeping_wait_on_captain_is_never_rechecked() {
+  local case_name line dir state fakebin win pane key marker before
+  for case_name in captain-held paused-on-captain; do
+    dir=$(make_supercase "wait-on-captain-$case_name")
+    state="$dir/state"; fakebin="$dir/fakebin"
+    win="sess:fm-held-w11h"; pane="$dir/pane.txt"
+    case "$case_name" in
+      captain-held) line='captain-held [key=route]: tracked by task-decision-route' ;;
+      paused-on-captain) line='paused [on=captain]: awaiting the captain on the merge word' ;;
+    esac
+    printf '%s\n' "$line" > "$state/held-w11h.status"
+    fm_write_meta "$state/held-w11h.meta" "window=$win" "worktree=$dir/wt" "kind=ship" "harness=pi"
+    # The control: an ordinary external wait on the same tick, equally overdue.
+    printf 'paused: holding for the upstream tool release\n' > "$state/held-w11x.status"
+    fm_write_meta "$state/held-w11x.meta" "window=sess:fm-held-w11x" "worktree=$dir/wt" "kind=ship" "harness=pi"
+    printf 'idle prompt $\n' > "$pane"
+    key=$(printf '%s' "held-w11h" | tr ':/.' '___')
+    marker="$state/.subsuper-paused-$key"
+    before=$(( $(date +%s) - 5000 ))
+    echo "$before" > "$marker"
+    echo "$before" > "$state/.subsuper-paused-$(printf '%s' "held-w11x" | tr ':/.' '___')"
+    PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+      FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
+    grep -F "awaiting the captain" "$state/.subsuper-escalations" >/dev/null 2>&1 \
+      && fail "[$case_name] a wait on the captain was rechecked: $(cat "$state/.subsuper-escalations" 2>/dev/null || true)"
+    grep -F "awaiting external" "$state/.subsuper-escalations" >/dev/null 2>&1 \
+      || fail "[$case_name] the external control was not rechecked, so this tick proves nothing: $(cat "$state/.subsuper-escalations" 2>/dev/null || true)"
+    [ -e "$marker" ] || fail "[$case_name] the wait's marker was dropped instead of left standing"
+    [ "$(cat "$marker" 2>/dev/null || true)" = "$before" ] \
+      || fail "[$case_name] a wait nobody rechecked had its window restarted"
+  done
+  pass "housekeeping never rechecks a wait on the captain while an external wait on the same tick still does"
 }
 
 # A crew that RESUMED - whose latest status line no longer declares the wait - drops
@@ -1035,10 +1049,12 @@ test_housekeeping_paused_resumed_cleared() {
 # into its one recheck. Away mode makes that terminal: the watcher hands a busy
 # declared wait to the daemon exactly once per declaration (bin/fm-watch.sh's
 # busy_turn_bound_check), so this recheck is the only thing left that can re-surface
-# the pane at all. Both declaration forms take the same 2b arm, so both are pinned.
+# the pane at all. Both wait OWNERS take the same 2b arm, so both are pinned: an
+# external wait matures into one recheck per window, and a wait on the captain
+# has no window to mature because only the captain can end it.
 test_housekeeping_busy_declared_wait_matures_its_window() {
   local case_name dir state fakebin task win pane key gen tick age escalations digest
-  for case_name in paused captain-held; do
+  for case_name in paused captain-held paused-on-captain; do
     dir=$(make_supercase "busy-declared-wait-$case_name")
     state="$dir/state"; fakebin="$dir/fakebin"
     task="held-w12b-$case_name"; win="sess:fm-$task"; pane="$dir/pane.txt"
@@ -1046,7 +1062,9 @@ test_housekeeping_busy_declared_wait_matures_its_window() {
       paused) printf 'paused: the audit engine is running to completion\n' > "$state/$task.status"
               digest="awaiting external" ;;
       captain-held) printf 'captain-held [key=route]: tracked by task-decision-route\n' > "$state/$task.status"
-              digest="awaiting the captain" ;;
+              digest= ;;
+      paused-on-captain) printf 'paused [on=captain]: awaiting the captain on the merge word\n' > "$state/$task.status"
+              digest= ;;
     esac
     printf 'Working...\n' > "$pane"
     fm_write_meta "$state/$task.meta" "window=$win" "worktree=$dir/wt" "kind=ship" "harness=pi"
@@ -1075,11 +1093,20 @@ test_housekeeping_busy_declared_wait_matures_its_window() {
       || fail "$case_name busy declared wait escalated inside its PAUSE_RESURFACE_SECS window"
 
     # Matured window: exactly one recheck, named for the right human, never a wedge,
-    # and the window reset so the next one repeats rather than firing once.
+    # and the window reset so the next one repeats rather than firing once - unless
+    # the wait is on the captain, which has no window and stays silent for as long
+    # as the declaration stands, however overdue the marker looks.
     echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$key"
     PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
       FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 FM_PAUSE_RESURFACE_SECS=3600 \
       housekeeping "$state"
+    if [ -z "$digest" ]; then
+      [ ! -s "$state/.subsuper-escalations" ] \
+        || fail "$case_name busy wait on the captain was rechecked past its window: $(cat "$state/.subsuper-escalations")"
+      [ -e "$state/.subsuper-paused-$key" ] \
+        || fail "$case_name busy wait on the captain dropped its marker instead of leaving it standing"
+      continue
+    fi
     escalations=0
     [ -s "$state/.subsuper-escalations" ] \
       && escalations=$(wc -l < "$state/.subsuper-escalations" | tr -d ' ')
@@ -1104,7 +1131,7 @@ test_housekeeping_busy_declared_wait_matures_its_window() {
     [ "$escalations" = 1 ] \
       || fail "$case_name busy declared wait re-surfaced again inside its reset window ($escalations escalations)"
   done
-  pass "housekeeping matures a busy pane's declared-wait window into exactly one recheck per window"
+  pass "housekeeping matures a busy external wait into one recheck per window and never rechecks a busy wait on the captain"
 }
 
 test_housekeeping_declared_time_controls_pause_recheck() {
@@ -2804,7 +2831,7 @@ test_housekeeping_seeds_pause_marker_from_status
 test_housekeeping_persistent_stale_escalates
 test_housekeeping_resumed_stale_cleared
 test_housekeeping_paused_resurfaces_and_resets
-test_housekeeping_captain_held_resurfaces_and_resets
+test_housekeeping_wait_on_captain_is_never_rechecked
 test_housekeeping_paused_resumed_cleared
 test_housekeeping_busy_declared_wait_matures_its_window
 test_housekeeping_declared_time_controls_pause_recheck
