@@ -22,9 +22,9 @@ REAL_CP=$(command -v cp)
 REAL_MV=$(command -v mv)
 REAL_STAT=$(command -v stat)
 REAL_CHMOD=$(command -v chmod)
-# The merge path reads a merge request's JSON with the real jq, and BASE_PATH is
-# deliberately restricted, so a case that needs jq exposes this one rather than
-# depending on the host keeping jq in one of those four directories.
+# The merge path reads GitHub/GitLab JSON with the real jq, and BASE_PATH is
+# deliberately restricted, so make_case links this into every case's fakebin
+# rather than depending on the host keeping jq in one of those four directories.
 REAL_JQ=$(command -v jq) || fail "these tests read glab's JSON with the real jq, which was not found"
 
 ack_watcher_cycle() {  # <state>
@@ -138,17 +138,49 @@ printf '%s\n' "$*" >> "$FM_TEST_GH_LOG"
 case "${1:-} ${2:-}" in
   "api graphql")
     printf '%s\n' \
-      'state=MERGED' \
-      'merged=true' \
-      'queued=false' \
+      "state=${FM_TEST_GH_GRAPHQL_STATE:-MERGED}" \
+      "merged=${FM_TEST_GH_GRAPHQL_MERGED:-true}" \
+      "queued=${FM_TEST_GH_GRAPHQL_QUEUED:-false}" \
       'base=main'
+    exit 0
+    ;;
+  "pr view")
+    case " $* " in
+      *statusCheckRollup*)
+        printf '%s\n' "{\"state\":\"OPEN\",\"isDraft\":false,\"mergeable\":\"MERGEABLE\",\"mergeStateStatus\":\"CLEAN\",\"headRefOid\":\"${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}\",\"baseRefName\":\"main\",\"statusCheckRollup\":[{\"__typename\":\"CheckRun\",\"name\":\"ci\",\"status\":\"COMPLETED\",\"conclusion\":\"SUCCESS\"}]}"
+        exit 0
+        ;;
+      *headRefOid,reviewDecision*)
+        printf '%s\n' "{\"headRefOid\":\"${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}\",\"reviewDecision\":\"APPROVED\"}"
+        exit 0
+        ;;
+    esac
+    ;;
+  "pr merge")
+    [ -z "${FM_TEST_GH_MERGE_HOOK:-}" ] || "$FM_TEST_GH_MERGE_HOOK"
     exit 0
     ;;
 esac
 case " $* " in
+  *" api repos/"*"/issues/"*"/comments?per_page=100 "*|*" api repos/"*"/pulls/"*"/reviews?per_page=100 "*|*" api repos/"*"/pulls/"*"/comments?per_page=100 "*)
+    printf '%s\n' '[[]]'
+    ;;
+  *" api repos/"*"/commits/"*"/check-runs?filter=all&per_page=100 "*)
+    printf '%s\n' '[{"check_runs":[]}]'
+    ;;
+  *" api repos/"*"/commits/"*"/statuses?per_page=100 "*)
+    printf '%s\n' '[[]]'
+    ;;
+  *" api repos/"*"/pulls/"*)
+    printf '%s\n' "{\"state\":\"open\",\"user\":{\"login\":\"author\"},\"head\":{\"sha\":\"${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}\"},\"draft\":false,\"mergeable\":true,\"merged_at\":null}"
+    ;;
+  *" api repos/"*)
+    printf '%s\n' '{"permissions":{"push":false}}'
+    ;;
   *" headRefOid "*) printf '%s\n' "${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}" ;;
   *" state "*)
     [ "${FM_TEST_GH_FAIL:-0}" = 0 ] || exit 1
+    [ -z "${FM_TEST_GH_STATE_STARTED:-}" ] || : > "$FM_TEST_GH_STATE_STARTED"
     [ "${FM_TEST_GH_SLEEP:-0}" = 0 ] || sleep "$FM_TEST_GH_SLEEP"
     printf '%s\n' "${FM_TEST_GH_STATE:-OPEN}"
     ;;
@@ -174,10 +206,41 @@ printf '%s\n' "$*" >> "$FM_TEST_GLAB_LOG"
 [ "${FM_TEST_GLAB_SLEEP:-0}" = 0 ] || sleep "$FM_TEST_GLAB_SLEEP"
 printf 'title:\tfixture merge request\nstate:\t%s\nauthor:\tsomeone\n' "${FM_TEST_GLAB_STATE:-opened}"
 SH
-  chmod +x "$fakebin/gh" "$fakebin/gh-axi" "$fakebin/glab"
+  # az with the azure-devops extension, reproducing the real CLI's contract:
+  # a JMESPath list rendered by "-o tsv" as one value per line, a JSON null
+  # rendered as the literal "None", and a non-zero exit with no stdout on any
+  # failure. "az repos" exits non-zero when the extension is absent.
+  cat > "$fakebin/az" <<'SH'
+#!/usr/bin/env bash
+[ -z "${FM_TEST_AZ_LOG:-}" ] || printf '%s\n' "$*" >> "$FM_TEST_AZ_LOG"
+case "${1:-} ${2:-}" in
+  "extension show")
+    [ "${FM_TEST_AZ_NO_EXT:-0}" = 0 ] || exit 1
+    printf 'azure-devops\n'
+    exit 0
+    ;;
+  "repos pr")
+    [ "${3:-}" = show ] || exit 2
+    [ "${FM_TEST_AZ_NO_EXT:-0}" = 0 ] || exit 1
+    [ "${FM_TEST_AZ_FAIL:-0}" = 0 ] || exit 1
+    printf '%s\n%s\n%s\n' \
+      "${FM_TEST_AZ_STATUS:-active}" \
+      "${FM_TEST_AZ_REPO:-Field.Tools}" \
+      "${FM_TEST_AZ_MERGE_COMMIT:-None}"
+    exit 0
+    ;;
+esac
+exit 2
+SH
+  chmod +x "$fakebin/gh" "$fakebin/gh-axi" "$fakebin/glab" "$fakebin/az"
+  # The merge path reads GitHub/GitLab JSON with the real jq, and BASE_PATH is
+  # deliberately restricted to a handful of system directories, so every case
+  # carries its own jq rather than depending on the host keeping it there.
+  ln -sf "$REAL_JQ" "$fakebin/jq"
   : > "$dir/gh.log"
   : > "$dir/gh-axi.log"
   : > "$dir/glab.log"
+  : > "$dir/az.log"
   : > "$dir/guard.log"
   printf '%s\n' "$dir"
 }
@@ -193,10 +256,14 @@ write_task_meta() {
     "mode=no-mistakes"
 }
 
+# Extra "field=value" arguments are written before pr=, because
+# fm_pr_metadata_identity_parse rejects an unrecognised line after it.
 write_poll_meta() {
   local state=$1 id=$2 url=$3
+  shift 3
   fm_write_meta "$state/$id.meta" \
     "window=fm-$id" \
+    "$@" \
     "pr=$url"
 }
 
@@ -207,6 +274,7 @@ run_check_entry() {
   FM_ROOT_OVERRIDE="$dir/root" FM_HOME="$dir/home" \
     FM_TEST_GUARD_LOG="$dir/guard.log" FM_TEST_GH_LOG="$dir/gh.log" \
     FM_TEST_GH_AXI_LOG="$dir/gh-axi.log" FM_TEST_GLAB_LOG="$dir/glab.log" \
+    FM_TEST_AZ_LOG="$dir/az.log" \
     PATH="$dir/fakebin:$BASE_PATH" \
     "$PR_CHECK" "$@"
 }
@@ -236,6 +304,45 @@ INVALID_URLS=(
   'https://gitlab.com/g/p/-/merge_requests/1?x=1'
   'https://gitlab.com/g/p/-/merge_requests/1#note'
   'https://gitlab.com/g/p/-/issues/1'
+  'https://dev.azure.com/org/project/_git/repo/pullrequest/0'
+  'https://dev.azure.com/org/project/_git/repo/pullrequest/01'
+  'https://dev.azure.com/org/project/_git/repo/pullrequest/1/'
+  'https://dev.azure.com/org/project/_git/repo/pullrequest/1?_a=overview'
+  'https://dev.azure.com/org/project/_git/repo/pullrequest/1#f'
+  'https://dev.azure.com/org/project/_git/repo/pullrequest/'
+  'https://dev.azure.com/org/project/_git/repo/pullRequest/1'
+  'https://dev.azure.com/org/project/_git/repo/pullrequests/1'
+  'https://dev.azure.com/org/project/repo/pullrequest/1'
+  'https://dev.azure.com/org/project/_git/repo/1'
+  'https://dev.azure.com/org/_git/repo/x/pullrequest/1'
+  'https://dev.azure.com/org/a/b/_git/repo/pullrequest/1'
+  'https://dev.azure.com/org//project/_git/repo/pullrequest/1'
+  'https://dev.azure.com//project/_git/repo/pullrequest/1'
+  'https://dev.azure.com/org/project/_git/_repo/pullrequest/1'
+  'https://dev.azure.com/org/project/_git/.repo/pullrequest/1'
+  'https://dev.azure.com/org/_project/_git/repo/pullrequest/1'
+  'https://dev.azure.com/or_g/project/_git/repo/pullrequest/1'
+  'https://dev.azure.com/-org/project/_git/repo/pullrequest/1'
+  'https://dev.azure.com/org-/project/_git/repo/pullrequest/1'
+  'https://dev.azure.com/org/Deal%2FMechanic/_git/repo/pullrequest/1'
+  'https://dev.azure.com/org/Deal%5CMechanic/_git/repo/pullrequest/1'
+  'https://dev.azure.com/org/Deal%0AMechanic/_git/repo/pullrequest/1'
+  'https://dev.azure.com/org/Deal%00Mechanic/_git/repo/pullrequest/1'
+  'https://dev.azure.com/org/Deal%2Mechanic/_git/repo/pullrequest/1'
+  'https://dev.azure.com/org/Deal%zzMechanic/_git/repo/pullrequest/1'
+  'https://dev.azure.com/org/Deal%/_git/repo/pullrequest/1'
+  'https://dev.azure.com/org/%20lead/_git/repo/pullrequest/1'
+  'https://dev.azure.com/org/lead%20/_git/repo/pullrequest/1'
+  'https://dev.azure.com/org/Deal Mechanic/_git/repo/pullrequest/1'
+  'https://dev.azure.com/org/project/_git/re+po/pullrequest/1'
+  'https://dev.azure.com/org/project/_git/re&po/pullrequest/1'
+  'https://dev.azure.com/org/project/_git/re$po/pullrequest/1'
+  'https://dev.azure.com/org/project/_git/re`po/pullrequest/1'
+  'https://github.com/o/r/_git/repo/pullrequest/1'
+  'https://DEV.azure.com/org/project/_git/repo/pullrequest/1'
+  'http://dev.azure.com/org/project/_git/repo/pullrequest/1'
+  'https://user@dev.azure.com/org/project/_git/repo/pullrequest/1'
+  'https://dev.azure.com:443/org/project/_git/repo/pullrequest/1'
   'https://gitlab.com//p/-/merge_requests/1'
   'https://.gitlab.com/g/p/-/merge_requests/1'
   'https://gitlab.com./g/p/-/merge_requests/1'
@@ -376,6 +483,24 @@ https://gitlab.com/group/sub/deep/project/-/merge_requests/42|gitlab.com|group/s
 https://gitlab.example.co.uk/g/p/-/merge_requests/7|gitlab.example.co.uk|g/p|7
 https://code.internal/team/tools/ci-runner/-/merge_requests/123456|code.internal|team/tools/ci-runner|123456
 EOF
+  while IFS='|' read -r url host path number; do
+    [ -n "$url" ] || continue
+    fm_pr_url_parse "$url" || fail "parser rejected a canonical Azure DevOps pull request URL"
+    [ "$FM_PR_PROVIDER" = azuredevops ] \
+      || fail "parser did not tag an Azure DevOps URL as azuredevops"
+    [ "$FM_PR_URL" = "$url" ] || fail "parser changed a canonical Azure DevOps URL"
+    [ "$FM_PR_HOST" = "$host" ] || fail "parser returned wrong Azure DevOps host"
+    [ "$FM_PR_PATH" = "$path" ] || fail "parser returned wrong Azure DevOps project path"
+    [ "$FM_PR_NUMBER" = "$number" ] || fail "parser returned wrong Azure DevOps pull request number"
+    [ -z "$FM_PR_OWNER" ] && [ -z "$FM_PR_REPO" ] \
+      || fail "parser set GitHub owner/repository for an Azure DevOps URL"
+  done <<'EOF'
+https://dev.azure.com/org/Project/_git/Repo/pullrequest/1|dev.azure.com|org/Project/_git/Repo|1
+https://dev.azure.com/org/Deal%20Mechanic/_git/Field.Tools/pullrequest/2530|dev.azure.com|org/Deal%20Mechanic/_git/Field.Tools|2530
+https://dev.azure.com/org/_git/Repo/pullrequest/7|dev.azure.com|org/_git/Repo|7
+https://devops.internal/DefaultCollection/Proj/_git/ci-runner/pullrequest/123456|devops.internal|DefaultCollection/Proj/_git/ci-runner|123456
+https://dev.azure.com/org/Reports%20(2026)/_git/a~b/pullrequest/9|dev.azure.com|org/Reports%20(2026)/_git/a~b|9
+EOF
   fm_pr_url_parse https://github.com/a/b/pull/1 || fail "parser rejected canonical URL"
   [ "$FM_PR_PROVIDER" = github ] || fail "parser did not tag a pull request URL as github"
   [ "$FM_PR_HOST" = github.com ] || fail "parser returned wrong GitHub host"
@@ -515,11 +640,11 @@ test_valid_recording_and_merge_derivation() {
   count=$(grep -c '^pr_head=' "$dir/home/state/task-a.meta")
   [ "$count" -eq 1 ] || fail "duplicate pr_head metadata was appended"
 
-  : > "$dir/gh-axi.log"
+  : > "$dir/gh.log"
   run_merge_entry "$dir" task-a https://github.com/my-org/repo_name.with-dots/pull/37 -- --merge \
     >/dev/null 2>/dev/null || fail "valid merge wrapper failed"
-  grep -qxF 'pr merge 37 --repo my-org/repo_name.with-dots --merge' "$dir/gh-axi.log" \
-    || fail "merge wrapper did not preserve repository derivation and method"
+  grep -qxF "pr merge 37 --repo my-org/repo_name.with-dots --match-head-commit $expected --merge" "$dir/gh.log" \
+    || fail "merge wrapper did not preserve repository derivation, live head, and method"
   # A merge this home performed leaves its own durable outcome, so the poll's
   # confirmation is no longer the first the captain hears of it. Acknowledge that
   # record before the watcher cycle below, which is what still retires the poll.
@@ -616,9 +741,10 @@ SH
 
 run_watcher_bounded() {
   local home=$1 fakebin=$2 check_interval=${FM_TEST_CHECK_INTERVAL:-0} watch_root=${FM_TEST_WATCH_ROOT:-$ROOT}
+  local check_timeout=${FM_TEST_CHECK_TIMEOUT:-1}
   shift 2
   perl -e 'my $pid=fork; die unless defined $pid; if (!$pid) { exec @ARGV } local $SIG{ALRM}=sub { kill "TERM", $pid; waitpid $pid, 0; exit 124 }; alarm 10; waitpid $pid, 0; alarm 0; exit($? >> 8)' \
-    env FM_HOME="$home" FM_ROOT_OVERRIDE="$watch_root" FM_CHECK_INTERVAL="$check_interval" FM_CHECK_TIMEOUT=1 \
+    env FM_HOME="$home" FM_ROOT_OVERRIDE="$watch_root" FM_CHECK_INTERVAL="$check_interval" FM_CHECK_TIMEOUT="$check_timeout" \
       FM_POLL=0.02 FM_HEARTBEAT=999999 FM_SIGNAL_GRACE=0 PATH="$fakebin:$BASE_PATH" "$WATCH" "$@"
 }
 
@@ -678,6 +804,7 @@ make_poll_fixture() {
 run_poll() {
   local dir=$1
   FM_TEST_GH_LOG="$dir/gh.log" FM_TEST_GLAB_LOG="$dir/glab.log" \
+    FM_TEST_AZ_LOG="$dir/az.log" \
     PATH="$dir/fakebin:$BASE_PATH" \
     bash "$dir/home/state/task-a.check.sh"
 }
@@ -1377,9 +1504,6 @@ EOF
   # state it could not read.
   write_task_meta "$dir" task-c
   : > "$dir/glab.log"
-  # The merge path needs jq before it reads anything, so this case supplies it
-  # and the refusal below is the unreadable state rather than a missing tool.
-  ln -sf "$REAL_JQ" "$dir/fakebin/jq"
   set +e
   run_merge_entry "$dir" task-c "$url" >/dev/null 2> "$dir/merge-c.err"
   rc=$?
@@ -1394,6 +1518,212 @@ EOF
     || fail "merge wrapper merged despite an unreadable merge request state"
 
   pass "GitLab merge requests are followed on any instance and never wake falsely"
+}
+
+# A search path mirroring the fixture's own, minus one tool, so a case that
+# proves an absent CLI cannot be satisfied by a real one elsewhere on PATH.
+make_path_without() {  # <dir> <tool-name>
+  local dir=$1 tool=$2 out bindir entry name
+  out="$dir/no-$tool"
+  mkdir -p "$out"
+  while IFS= read -r bindir; do
+    [ -d "$bindir" ] || continue
+    for entry in "$bindir"/*; do
+      [ -e "$entry" ] || continue
+      name=$(basename "$entry")
+      [ "$name" = "$tool" ] && continue
+      [ -e "$out/$name" ] || ln -s "$entry" "$out/$name" 2>/dev/null
+    done
+  done <<EOF
+$dir/fakebin
+$(printf '%s\n' "$BASE_PATH" | tr ':' '\n')
+EOF
+  ! PATH="$out" command -v "$tool" >/dev/null 2>&1 || fail "the $tool-free search path still resolved $tool"
+  printf '%s\n' "$out"
+}
+
+test_azure_devops_merge_watch() {
+  local dir state out rc url noaz
+  dir=$(make_case azure-devops-merge-watch)
+  state="$dir/home/state"
+  # The project segment is percent-encoded, which is the shape Azure DevOps
+  # itself produces for a project name with a space in it.
+  url='https://dev.azure.com/example-org/Deal%20Mechanic/_git/Field.Tools/pullrequest/2530'
+
+  write_task_meta "$dir" task-a
+  out=$(run_check_entry "$dir" task-a "$url") \
+    || fail "arming an Azure DevOps watch failed"
+  [ "$out" = 'armed: state/task-a.check.sh' ] || fail "arming an Azure DevOps watch printed no armed line"
+  fm_pr_poll_artifacts_valid "$state" task-a "$POLL" \
+    || fail "published Azure DevOps poll provenance or metadata binding was invalid"
+  grep -qxF "pr=$url" "$state/task-a.meta" \
+    || fail "arming an Azure DevOps watch recorded no canonical pr="
+  [ "$(cat "$state/task-a.pr-poll")" = "azuredevops
+$url
+dev.azure.com
+example-org/Deal%20Mechanic/_git/Field.Tools
+2530" ] || fail "published Azure DevOps sidecar bytes were not exact"
+
+  # Only a completed pull request with a real merge commit is the landed
+  # reading. An abandoned one is closed without landing and must stay silent,
+  # as must every other status and an unreadable pull request.
+  for out in active abandoned notSet '' completed-ish COMPLETED; do
+    out=$(FM_TEST_AZ_STATUS="$out" FM_TEST_AZ_REPO=Field.Tools \
+      FM_TEST_AZ_MERGE_COMMIT=0123456789abcdef0123456789abcdef01234567 run_poll "$dir")
+    [ -z "$out" ] || fail "Azure DevOps poll emitted for a status that is not completed"
+  done
+  out=$(FM_TEST_AZ_STATUS=completed FM_TEST_AZ_REPO=Field.Tools run_poll "$dir")
+  [ -z "$out" ] || fail "Azure DevOps poll emitted for a completed pull request with no merge commit"
+  out=$(FM_TEST_AZ_STATUS=completed FM_TEST_AZ_REPO=Field.Tools \
+    FM_TEST_AZ_MERGE_COMMIT=not-a-commit run_poll "$dir")
+  [ -z "$out" ] || fail "Azure DevOps poll emitted for an unreadable merge commit"
+  out=$(FM_TEST_AZ_FAIL=1 FM_TEST_AZ_STATUS=completed FM_TEST_AZ_REPO=Field.Tools \
+    FM_TEST_AZ_MERGE_COMMIT=0123456789abcdef0123456789abcdef01234567 run_poll "$dir")
+  [ -z "$out" ] || fail "Azure DevOps poll emitted after an az failure"
+
+  # A pull request id is unique per organisation rather than per repository, so
+  # the answer is bound to the repository the URL names. The comparison is
+  # against the decoded name and is case-insensitive, as Azure DevOps is.
+  out=$(FM_TEST_AZ_STATUS=completed FM_TEST_AZ_REPO=Other.Repo \
+    FM_TEST_AZ_MERGE_COMMIT=0123456789abcdef0123456789abcdef01234567 run_poll "$dir")
+  [ -z "$out" ] || fail "Azure DevOps poll emitted for a merge in another repository"
+  out=$(FM_TEST_AZ_STATUS=completed FM_TEST_AZ_REPO=field.TOOLS \
+    FM_TEST_AZ_MERGE_COMMIT=0123456789abcdef0123456789abcdef01234567 run_poll "$dir")
+  [ "$out" = merged ] || fail "Azure DevOps poll did not match its repository case-insensitively"
+  out=$(FM_TEST_AZ_STATUS=completed FM_TEST_AZ_REPO=Field.Tools \
+    FM_TEST_AZ_MERGE_COMMIT=0123456789abcdef0123456789abcdef01234567 run_poll "$dir")
+  [ "$out" = merged ] || fail "Azure DevOps poll did not emit exactly one merged line"
+
+  # az resolves the pull request by an organisation-wide id, so it is addressed
+  # by organisation URL and id and never by the pull request URL, and never
+  # allowed to detect an organisation from a repository the watcher lacks.
+  grep -qF -- '--organization https://dev.azure.com/example-org' "$dir/az.log" \
+    || fail "Azure DevOps poll did not address az by organisation URL"
+  grep -qF -- '--id 2530' "$dir/az.log" || fail "Azure DevOps poll did not address az by pull request id"
+  grep -qF -- '--detect false' "$dir/az.log" || fail "Azure DevOps poll let az detect an organisation"
+  ! grep -qF -- "$url" "$dir/az.log" || fail "Azure DevOps poll passed a pull request URL to az"
+
+  # A decoded project name with a space reaches nothing as a split argument.
+  ! grep -qF -- 'Deal Mechanic' "$dir/az.log" \
+    || fail "Azure DevOps poll passed a decoded project name to az"
+
+  # A doctored sidecar cannot redirect the poll: the stored parts must rebuild
+  # the stored URL exactly.
+  printf '%s\n%s\n%s\n%s\n%s\n' azuredevops "$url" other.example \
+    'example-org/Deal%20Mechanic/_git/Field.Tools' 2530 > "$state/task-a.pr-poll"
+  out=$(FM_TEST_AZ_STATUS=completed FM_TEST_AZ_REPO=Field.Tools \
+    FM_TEST_AZ_MERGE_COMMIT=0123456789abcdef0123456789abcdef01234567 run_poll "$dir")
+  [ -z "$out" ] || fail "Azure DevOps poll emitted for a sidecar whose host was swapped"
+  printf '%s\n%s\n%s\n%s\n%s\n' azuredevops "$url" dev.azure.com \
+    'other-org/Deal%20Mechanic/_git/Field.Tools' 2530 > "$state/task-a.pr-poll"
+  out=$(FM_TEST_AZ_STATUS=completed FM_TEST_AZ_REPO=Field.Tools \
+    FM_TEST_AZ_MERGE_COMMIT=0123456789abcdef0123456789abcdef01234567 run_poll "$dir")
+  [ -z "$out" ] || fail "Azure DevOps poll emitted for a sidecar whose organisation was swapped"
+
+  # An absent CLI produces no wake rather than a false merge, so arming is
+  # where it is reported instead.
+  noaz=$(make_path_without "$dir" az)
+  out=$(FM_TEST_AZ_STATUS=completed FM_TEST_AZ_REPO=Field.Tools \
+    FM_TEST_AZ_MERGE_COMMIT=0123456789abcdef0123456789abcdef01234567 \
+    PATH="$noaz" bash "$state/task-a.check.sh")
+  [ -z "$out" ] || fail "Azure DevOps poll emitted with az absent from PATH"
+
+  write_task_meta "$dir" task-b
+  set +e
+  out=$(FM_ROOT_OVERRIDE="$dir/root" FM_HOME="$dir/home" \
+    FM_TEST_GUARD_LOG="$dir/guard.log" PATH="$noaz" \
+    "$PR_CHECK" task-b "$url" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "arming an Azure DevOps watch succeeded with az absent"
+  case "$out" in
+    *"requires az on PATH"*) ;;
+    *) fail "arming an Azure DevOps watch with az absent did not report the missing CLI" ;;
+  esac
+  [ ! -e "$state/task-b.check.sh" ] || fail "refused Azure DevOps arming left a poll armed"
+
+  # "az repos" lives in an extension, so an az without it can never answer the
+  # poll and is reported at arming for the same reason.
+  set +e
+  out=$(FM_TEST_AZ_NO_EXT=1 run_check_entry "$dir" task-b "$url" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "arming an Azure DevOps watch succeeded without the azure-devops extension"
+  case "$out" in
+    *"requires the az azure-devops extension"*) ;;
+    *) fail "arming an Azure DevOps watch without the extension did not report it" ;;
+  esac
+  [ ! -e "$state/task-b.check.sh" ] || fail "refused Azure DevOps arming left a poll armed"
+
+  # A GitHub task is unaffected by an absent az.
+  write_task_meta "$dir" task-d
+  out=$(FM_ROOT_OVERRIDE="$dir/root" FM_HOME="$dir/home" \
+    FM_TEST_GUARD_LOG="$dir/guard.log" PATH="$noaz" \
+    "$PR_CHECK" task-d https://github.com/o/r/pull/1 2>&1) \
+    || fail "arming a GitHub watch failed with az absent"
+  [ "$out" = 'armed: state/task-d.check.sh' ] || fail "an absent az changed GitHub arming"
+
+  # The merge path follows an Azure DevOps pull request but never merges one,
+  # and refuses before it records anything.
+  write_task_meta "$dir" task-e
+  set +e
+  run_merge_entry "$dir" task-e "$url" > "$dir/merge-e.out" 2> "$dir/merge-e.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "merge wrapper did not refuse an Azure DevOps pull request"
+  grep -qF 'merging an Azure DevOps pull request is not supported here' "$dir/merge-e.err" \
+    || fail "merge wrapper refused for some reason other than the unsupported forge"
+  [ ! -e "$state/task-e.check.sh" ] || fail "refused Azure DevOps merge armed a poll"
+  ! grep -q '^pr=' "$state/task-e.meta" || fail "refused Azure DevOps merge recorded a canonical pr="
+
+  pass "Azure DevOps pull requests are followed on any organisation and never wake falsely"
+}
+
+test_azure_devops_merged_poll_retires() {
+  local dir state url rc
+  dir=$(make_case azure-devops-merged-retirement)
+  state="$dir/home/state"
+  url='https://dev.azure.com/example-org/Deal%20Mechanic/_git/Field.Tools/pullrequest/17'
+  write_poll_meta "$state" task-a "$url"
+  seed_canonical_poll "$dir" task-a "$url"
+  set +e
+  FM_TEST_AZ_STATUS=completed FM_TEST_AZ_REPO=Field.Tools \
+    FM_TEST_AZ_MERGE_COMMIT=0123456789abcdef0123456789abcdef01234567 \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "Azure DevOps merged retirement watcher failed: $(cat "$dir/watch.err")"
+  case "$(cat "$dir/watch.out")" in
+    check:*task-a.check.sh:*merged) ;;
+    *) fail "Azure DevOps merged wake was missing" ;;
+  esac
+  assert_poll_absent "$state" task-a
+  grep -qxF "pr=$url" "$state/task-a.meta" || fail "Azure DevOps retirement removed canonical metadata"
+  pass "a completed Azure DevOps pull request lands one merge outcome through the shared retirement path"
+}
+
+test_azure_devops_abandoned_poll_stays_armed() {
+  local dir state url rc
+  dir=$(make_case azure-devops-abandoned)
+  state="$dir/home/state"
+  url='https://dev.azure.com/example-org/Deal%20Mechanic/_git/Field.Tools/pullrequest/18'
+  write_poll_meta "$state" task-a "$url"
+  seed_canonical_poll "$dir" task-a "$url"
+  add_stop_custom_check "$dir"
+  set +e
+  FM_TEST_AZ_STATUS=abandoned FM_TEST_AZ_REPO=Field.Tools \
+    FM_TEST_AZ_MERGE_COMMIT=0123456789abcdef0123456789abcdef01234567 \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "Azure DevOps abandoned watcher failed: $(cat "$dir/watch.err")"
+  ! grep -qF 'task-a.check.sh' "$dir/watch.out" \
+    || fail "an abandoned Azure DevOps pull request was reported as landed"
+  [ -z "$(merged_ledger_row "$state" task-a)" ] \
+    || fail "an abandoned Azure DevOps pull request recorded a merge outcome"
+  fm_pr_poll_artifacts_valid "$state" task-a "$POLL" \
+    || fail "an abandoned Azure DevOps pull request retired its still-open watch"
+  pass "an abandoned Azure DevOps pull request is never reported as landed"
 }
 
 seed_canonical_poll() {
@@ -1582,7 +1912,7 @@ test_merged_poll_retries_a_failed_upward_report() {
     set -e
     [ "$rc" -eq 0 ] || fail "merged-poll-upward-retry: post-recovery retry failed: $(cat "$dir/watch-3.err")"
   fi
-  assert_grep "done [key=merged-task-a]: merged task-a $url" "$replies" \
+  assert_grep "done [key=merged-task-a]: merged task-a $url" <(sed -E 's/ \[at=[0-9]+\]//' "$replies") \
     "merged-poll-upward-retry: repaired binding did not receive the retry"
   assert_poll_absent "$state" task-a
   pass "a failed upward merge report keeps its poll armed for repair and retry"
@@ -1611,7 +1941,7 @@ test_self_merge_and_poll_publish_one_outcome() {
   set -e
   [ "$rc" -eq 0 ] \
     || fail "merge-outcome-committed: watcher failed: $(cat "$dir/watch.err")"
-  [ "$(grep -c -F "done [key=merged-task-a]: merged task-a $url" "$replies")" -eq 1 ] \
+  [ "$(sed -E 's/ \[at=[0-9]+\]//' "$replies" | grep -c -F "done [key=merged-task-a]: merged task-a $url")" -eq 1 ] \
     || fail "merge-outcome-committed: self and poll reports produced duplicate merge outcomes"
   assert_no_grep "check: $state/task-a.check.sh: merged" "$state/.wake-queue" \
     "merge-outcome-committed: absorbed poll published a second outcome"
@@ -1689,7 +2019,7 @@ test_merged_poll_reports_upward_from_a_secondmate_home_once() {
     check:*task-a.check.sh:*merged) ;;
     *) fail "merged-poll-upward: the poll's own row was lost: $(cat "$dir/watch-1.out")" ;;
   esac
-  assert_grep "done [key=merged-task-a]: merged task-a $url" "$replies" \
+  assert_grep "done [key=merged-task-a]: merged task-a $url" <(sed -E 's/ \[at=[0-9]+\]//' "$replies") \
     "merged-poll-upward: a merge this home did not perform was never reported upward"
   [ "$(grep -c -F "$url" "$replies")" -eq 1 ] \
     || fail "merged-poll-upward: one detected merge produced more than one upward line"
@@ -2127,12 +2457,606 @@ test_gitlab_merged_poll_retires() {
   pass "GitHub and GitLab exact merged results share one retirement path"
 }
 
+# --- poll-path merge authority ----------------------------------------------
+
+write_away_record() {  # <dir> [<fm-afk-contract.sh propose args>...]
+  local dir=$1
+  shift
+  FM_HOME="$dir/home" FM_STATE_OVERRIDE="$dir/home/state" \
+    "$ROOT/bin/fm-afk-contract.sh" propose "$@" >/dev/null \
+    || fail "could not propose an away-posture record"
+  FM_HOME="$dir/home" FM_STATE_OVERRIDE="$dir/home/state" \
+    "$ROOT/bin/fm-afk-contract.sh" confirm >/dev/null \
+    || fail "could not confirm an away-posture record"
+}
+
+archive_away_record() {  # <dir>
+  FM_HOME="$1/home" FM_STATE_OVERRIDE="$1/home/state" \
+    "$ROOT/bin/fm-afk-contract.sh" archive >/dev/null \
+    || fail "could not archive the away-posture record"
+}
+
+# The durable queue is TSV (epoch, sequence, kind, key, payload).
+merged_ledger_row() {  # <state> <task-id>
+  awk -F'\t' -v prefix="check: merge landed: $2 " \
+    'index($5, prefix) == 1 { print $5 }' "$1/.wake-queue"
+}
+
+run_merged_poll_cycle() {  # <dir>
+  local dir=$1 rc=0
+  add_stop_custom_check "$dir"
+  set +e
+  FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" \
+    > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "merged poll watcher failed: $(cat "$dir/watch.err")"
+}
+
+queue_merge() {  # <dir> <url>
+  local dir=$1 url=$2 rc=0
+  set +e
+  FM_TEST_GH_GRAPHQL_STATE=OPEN FM_TEST_GH_GRAPHQL_MERGED=false \
+    FM_TEST_GH_GRAPHQL_QUEUED=true \
+    run_merge_entry "$dir" task-a "$url" > "$dir/merge.out" 2> "$dir/merge.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "queued merge failed: $(cat "$dir/merge.err")"
+  assert_grep "is queued" "$dir/merge.out" "the forge did not queue the merge"
+  [ -f "$dir/home/state/task-a.merge-authority" ] \
+    || fail "the accepted queued merge did not persist its authority"
+}
+
+test_merged_poll_row_carries_the_merge_authority() {
+  local dir state url expected posture
+  url=https://github.com/o/r/pull/1
+
+  for posture in yolo grant; do
+    dir=$(make_case "queued-merge-authority-$posture")
+    state="$dir/home/state"
+    write_task_meta "$dir" task-a
+    if [ "$posture" = yolo ]; then
+      printf 'yolo=on\n' >> "$state/task-a.meta"
+      write_away_record "$dir"
+      expected=yolo
+    else
+      write_away_record "$dir" --grant task-a
+      expected=away-grant
+    fi
+    run_check_entry "$dir" task-a "$url" >/dev/null 2> "$dir/seed.err" \
+      || fail "$posture: could not arm the merge poll"
+    queue_merge "$dir" "$url"
+    archive_away_record "$dir"
+    run_merged_poll_cycle "$dir"
+    [ "$(merged_ledger_row "$state" task-a)" = "check: merge landed: task-a $url $expected" ] \
+      || fail "$posture: archived posture lost persisted authority: $(merged_ledger_row "$state" task-a)"
+    [ ! -e "$state/task-a.merge-authority" ] \
+      || fail "$posture: published merge left its authority record behind"
+  done
+
+  pass "queued merges retain yolo and away-grant after captain return"
+}
+
+test_merged_poll_row_names_no_authority_when_no_record_grants_one() {
+  local dir state url
+  url=https://github.com/o/r/pull/1
+
+  dir=$(make_case queued-merge-authority-attended)
+  state="$dir/home/state"
+  write_task_meta "$dir" task-a
+  run_check_entry "$dir" task-a "$url" >/dev/null 2> "$dir/seed.err" \
+    || fail "attended: could not arm the merge poll"
+  queue_merge "$dir" "$url"
+  run_merged_poll_cycle "$dir"
+  [ "$(merged_ledger_row "$state" task-a)" = "check: merge landed: task-a $url" ] \
+    || fail "attended queued merge was tagged: $(merged_ledger_row "$state" task-a)"
+
+  dir=$(make_case merged-poll-authority-external)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a "$url" yolo=on
+  write_away_record "$dir"
+  seed_canonical_poll "$dir" task-a "$url"
+  run_merged_poll_cycle "$dir"
+  [ "$(merged_ledger_row "$state" task-a)" = "check: merge landed: task-a $url external" ] \
+    || fail "external merge was attributed from live away posture: $(merged_ledger_row "$state" task-a)"
+  assert_poll_absent "$state" task-a
+
+  pass "poll distinguishes attended authorization from external landing"
+}
+
+test_authority_persistence_refuses_rebound_metadata() {
+  local dir state url_a url_b rc
+  url_a=https://github.com/o/r/pull/1
+  url_b=https://github.com/o/r/pull/2
+  dir=$(make_case merge-authority-rebound-metadata)
+  state="$dir/home/state"
+  write_task_meta "$dir" task-a
+  run_check_entry "$dir" task-a "$url_a" >/dev/null 2> "$dir/seed.err" \
+    || fail "rebind: could not arm the original poll"
+  cat > "$dir/rebind.sh" <<SH
+#!/usr/bin/env bash
+"$PR_CHECK" task-a "$url_b" >/dev/null
+SH
+  chmod +x "$dir/rebind.sh"
+  set +e
+  FM_TEST_GH_MERGE_HOOK="$dir/rebind.sh" \
+    FM_TEST_GH_GRAPHQL_STATE=OPEN FM_TEST_GH_GRAPHQL_MERGED=false \
+    FM_TEST_GH_GRAPHQL_QUEUED=true \
+    run_merge_entry "$dir" task-a "$url_a" > "$dir/merge.out" 2> "$dir/merge.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "rebind: accepted merge persisted against rebound metadata"
+  grep -qxF "pr=$url_b" "$state/task-a.meta" \
+    || fail "rebind: merge hook did not replace the canonical identity"
+  [ ! -e "$state/task-a.merge-authority" ] \
+    || fail "rebind: authority was published for the wrong canonical identity"
+  pass "accepted merge authority refuses rebound task metadata"
+}
+
+test_authority_persists_before_control_unlock() {
+  local dir state url
+  url=https://github.com/o/r/pull/1
+  dir=$(make_case merge-authority-control-lock)
+  state="$dir/home/state"
+  write_task_meta "$dir" task-a
+  run_check_entry "$dir" task-a "$url" >/dev/null 2> "$dir/seed.err" \
+    || fail "control lock: could not arm the merge poll"
+  cat > "$dir/fakebin/mv" <<'SH'
+#!/usr/bin/env bash
+case " $* " in
+  *"task-a.merge-authority "*)
+    [ -d "$FM_TEST_CONTROL_LOCK" ] || exit 91
+    ;;
+esac
+exec "$FM_TEST_REAL_MV" "$@"
+SH
+  chmod +x "$dir/fakebin/mv"
+  FM_TEST_CONTROL_LOCK="$state/.control-task-a.lock" FM_TEST_REAL_MV="$REAL_MV" \
+    queue_merge "$dir" "$url"
+  pass "accepted merge authority persists under the lifecycle lock"
+}
+
+test_teardown_cannot_race_authority_consumption() {
+  local dir state url watcher_pid rc i
+  url=https://github.com/o/r/pull/1
+  dir=$(make_case merge-authority-teardown-race)
+  state="$dir/home/state"
+  fm_write_meta "$state/task-a.meta" \
+    'window=firstmate:fm-task-a' \
+    'endpoint_task_id=task-a' \
+    "worktree=$dir/wt" \
+    "project=$dir/project" \
+    'kind=ship' \
+    'mode=local-only' \
+    'yolo=on'
+  write_away_record "$dir"
+  run_check_entry "$dir" task-a "$url" >/dev/null 2> "$dir/seed.err" \
+    || fail "teardown race: could not arm the merge poll"
+  queue_merge "$dir" "$url"
+  archive_away_record "$dir"
+  FM_TEST_GH_STATE_STARTED="$dir/poll-started" FM_TEST_GH_STATE=MERGED \
+    FM_TEST_GH_SLEEP=0.5 FM_TEST_CHECK_TIMEOUT=3 \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" \
+      > "$dir/watch.out" 2> "$dir/watch.err" &
+  watcher_pid=$!
+  i=0
+  while [ ! -e "$dir/poll-started" ]; do
+    sleep 0.01
+    i=$((i + 1))
+    if [ "$i" -ge 500 ]; then
+      kill "$watcher_pid" 2>/dev/null || true
+      wait "$watcher_pid" 2>/dev/null || true
+      fail "teardown race: watcher did not begin its validated poll"
+    fi
+  done
+  set +e
+  FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$ROOT" PATH="$dir/fakebin:$BASE_PATH" \
+    "$TEARDOWN" task-a --force > "$dir/teardown.out" 2> "$dir/teardown.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "teardown race: cleanup crossed the active poll transaction"
+  [ -f "$state/task-a.merge-authority" ] \
+    || fail "teardown race: refused cleanup removed persisted authority"
+  rc=0
+  wait "$watcher_pid" || rc=$?
+  [ "$rc" -eq 0 ] || fail "teardown race: watcher failed with $rc: $(cat "$dir/watch.err")"
+  [ "$(merged_ledger_row "$state" task-a)" = "check: merge landed: task-a $url yolo" ] \
+    || fail "teardown race: concurrent cleanup downgraded the merge authority"
+  pass "teardown cannot race merged-poll authority consumption"
+}
+
+test_authority_retirement_preserves_replacement() {
+  local dir state url_a url_b rc i
+  url_a=https://github.com/o/r/pull/1
+  url_b=https://github.com/o/r/pull/2
+  dir=$(make_case merge-authority-retirement-replacement)
+  state="$dir/home/state"
+  write_task_meta "$dir" task-a
+  run_check_entry "$dir" task-a "$url_a" >/dev/null 2> "$dir/seed.err" \
+    || fail "replacement: could not arm the original poll"
+  queue_merge "$dir" "$url_a"
+  cat > "$dir/replace-authority.sh" <<SH
+#!/usr/bin/env bash
+"$PR_CHECK" task-a "$url_b" >/dev/null
+(
+  FM_TEST_GH_GRAPHQL_STATE=OPEN FM_TEST_GH_GRAPHQL_MERGED=false \\
+  FM_TEST_GH_GRAPHQL_QUEUED=true \\
+  "$PR_MERGE" task-a "$url_b" > "$dir/replacement-merge.out" 2> "$dir/replacement-merge.err"
+  printf '%s\n' \$? > "$dir/replacement-merge.rc"
+) &
+SH
+  chmod +x "$dir/replace-authority.sh"
+  cat > "$dir/fakebin/mv" <<'SH'
+#!/usr/bin/env bash
+"$FM_TEST_REAL_MV" "$@" || exit $?
+case " $* " in
+  *"task-a.pr-poll-merge-notified "*)
+    if [ ! -e "$FM_TEST_REPLACEMENT_RAN" ]; then
+      : > "$FM_TEST_REPLACEMENT_RAN"
+      "$FM_TEST_REPLACEMENT_SCRIPT"
+    fi
+    ;;
+esac
+SH
+  chmod +x "$dir/fakebin/mv"
+  add_stop_custom_check "$dir"
+  set +e
+  FM_TEST_REAL_MV="$REAL_MV" FM_TEST_REPLACEMENT_RAN="$dir/replacement-ran" \
+    FM_TEST_REPLACEMENT_SCRIPT="$dir/replace-authority.sh" \
+    FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" \
+      > "$dir/watch-a.out" 2> "$dir/watch-a.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "replacement: original poll failed: $(cat "$dir/watch-a.err")"
+  i=0
+  while [ ! -e "$dir/replacement-merge.rc" ]; do
+    sleep 0.01
+    i=$((i + 1))
+    [ "$i" -lt 200 ] || fail "replacement: serialized replacement merge did not finish"
+  done
+  [ "$(cat "$dir/replacement-merge.rc")" -eq 0 ] \
+    || fail "replacement: serialized replacement merge failed: $(cat "$dir/replacement-merge.err")"
+  [ -f "$state/task-a.merge-authority" ] \
+    || fail "replacement: original poll retirement deleted the replacement authority"
+  grep -qxF "pr=$url_b" "$state/task-a.meta" \
+    || fail "replacement: replacement poll was not armed"
+  ack_watcher_cycle "$state" || fail "replacement: could not acknowledge the original wake"
+  rm -f "$dir/fakebin/mv" "$state/.last-check"
+  run_merged_poll_cycle "$dir"
+  awk -F'\t' -v expected="check: merge landed: task-a $url_b" \
+    '$5 == expected { found=1 } END { exit !found }' "$state/.wake-queue" \
+    || fail "replacement: replacement merge lost its attended authority"
+  pass "poll retirement preserves a replacement authority record"
+}
+
+# A volume remount can renumber the state filesystem's st_dev while every inode
+# and byte stays put, as APFS does across a reboot. This rewrites a published
+# registration's recorded device the way that leaves it, changing no other
+# byte. <which> is both, data, or check.
+shift_registration_device() {  # <state> <id> [both|data|check]
+  local state=$1 id=$2 which=${3:-both} registration device shifted tmp
+  registration="$state/$id.pr-poll-registration"
+  device=$(fm_pr_file_device "$state") || fail "could not read the state device"
+  shifted=$((device + 1))
+  tmp=$(mktemp "$state/.test-shifted-registration.XXXXXX") || fail "could not stage a shifted registration"
+  awk -v live="$device" -v shifted="$shifted" -v which="$which" '
+    (NR == 10 && which != "check") || (NR == 11 && which != "data") { sub("^" live ":", shifted ":") }
+    { print }
+  ' "$registration" > "$tmp" || fail "could not shift the registration device"
+  chmod 0600 "$tmp"
+  mv -f -- "$tmp" "$registration"
+  case "$which" in
+    both|data) [ "$(sed -n 10p "$registration")" = "$shifted:$(fm_pr_file_inode "$state/$id.pr-poll")" ] \
+      || fail "shifted fixture did not move only the recorded sidecar device" ;;
+  esac
+  case "$which" in
+    both|check) [ "$(sed -n 11p "$registration")" = "$shifted:$(fm_pr_file_inode "$state/$id.check.sh")" ] \
+      || fail "shifted fixture did not move only the recorded check device" ;;
+  esac
+}
+
+test_device_renumbered_poll_stays_armed() {
+  local dir state out rc original
+  dir=$(make_case device-renumber-merged)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+  shift_registration_device "$state" task-a
+  # Assert the divergence so the case cannot pass vacuously: only the recorded
+  # device differs, and that alone refuses the strict validation.
+  cmp -s "$POLL" "$state/task-a.check.sh" || fail "renumber fixture changed the check bytes"
+  [ "$(sed -n 8p "$state/task-a.pr-poll-registration")" = "$(fm_pr_sha256 "$state/task-a.pr-poll")" ] \
+    || fail "renumber fixture changed the sidecar hash"
+  ! fm_pr_poll_artifacts_valid "$state" task-a "$POLL" \
+    || fail "renumber fixture still authenticated before any watcher cycle"
+  set +e
+  FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "renumbered poll watcher failed: $(cat "$dir/watch.err")"
+  out=$(cat "$dir/watch.out")
+  case "$out" in
+    *'rejected unauthenticated state checks'*) fail "watcher refused a poll whose only change was a renumbered volume: $out" ;;
+  esac
+  [ "$(grep -c '^check: .*task-a\.check\.sh: merged$' "$dir/watch.out")" -eq 1 ] \
+    || fail "renumbered poll did not surface its merge exactly once: $out"
+
+  dir=$(make_case device-renumber-rerecord)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+  original="$dir/registration.original"
+  cp "$state/task-a.pr-poll-registration" "$original"
+  shift_registration_device "$state" task-a
+  add_stop_custom_check "$dir"
+  cat > "$dir/fakebin/mv" <<'SH'
+#!/usr/bin/env bash
+case " $* " in
+  *"task-a.pr-poll-registration "*)
+    [ -d "$FM_TEST_CONTROL_LOCK" ] || exit 91
+    [ -d "$FM_TEST_POLL_PUBLISH_LOCK" ] || exit 92
+    : > "$FM_TEST_REGISTRATION_RENAMED"
+    ;;
+esac
+exec "$FM_TEST_REAL_MV" "$@"
+SH
+  chmod +x "$dir/fakebin/mv"
+  set +e
+  FM_TEST_CONTROL_LOCK="$state/.control-task-a.lock" \
+    FM_TEST_POLL_PUBLISH_LOCK="$state/.pr-poll-publish-task-a.lock" FM_TEST_REAL_MV="$REAL_MV" \
+    FM_TEST_REGISTRATION_RENAMED="$dir/registration-renamed" \
+    FM_TEST_GH_LOG="$dir/gh.log" FM_TEST_GH_STATE=OPEN \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "re-record watcher failed: $(cat "$dir/watch.err")"
+  [ -e "$dir/registration-renamed" ] || fail "re-record never replaced the registration under its locks"
+  cmp -s "$original" "$state/task-a.pr-poll-registration" \
+    || fail "re-recorded registration differs from the one published on the live device"
+  [ "$(file_mode "$state/task-a.pr-poll-registration")" = 600 ] || fail "re-recorded registration is not private"
+  fm_pr_poll_artifacts_valid "$state" task-a "$POLL" || fail "re-recorded poll is not strictly authenticated"
+  grep -F 'pr view https://github.com/o/r/pull/1 --json state' "$dir/gh.log" >/dev/null \
+    || fail "re-recorded poll did not run its validated check in the same cycle"
+  grep -F 're-recorded PR poll identity for task-a' "$state/.watch-triage.log" >/dev/null \
+    || fail "re-record left no triage evidence"
+  ! ls "$state"/.fm-pr-poll-registration.* >/dev/null 2>&1 || fail "re-record left a staged registration behind"
+  pass "a poll armed before a volume renumber is re-recorded under the control lock and keeps detecting merges"
+}
+
+test_device_rerecord_refuses_tampered_artifacts() {
+  local mutation dir state out rc registration_sha shifted_device replacement exercised=
+  for mutation in swapped-check altered-check swapped-sidecar altered-sidecar altered-template-hash \
+    wrong-mode hardlinked-check split-device foreign-device; do
+    # A regular file cannot sit on another device than its own directory without
+    # a file mount, which Darwin does not offer, and Darwin's device helper reads
+    # /usr/bin/stat directly, so no PATH fake can stand in there.
+    if [ "$mutation" = foreign-device ] && [ "$(uname)" = Darwin ]; then
+      exercised="$exercised (foreign-device not exercisable on Darwin)"
+      continue
+    fi
+    exercised="$exercised $mutation"
+    dir=$(make_case "device-rerecord-refuses-$mutation")
+    state="$dir/home/state"
+    write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+    seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+    if [ "$mutation" = split-device ]; then
+      shift_registration_device "$state" task-a data
+    else
+      shift_registration_device "$state" task-a
+    fi
+    shifted_device=$(( $(fm_pr_file_device "$state") + 1 ))
+    case "$mutation" in
+      swapped-check)
+        cp "$POLL" "$state/.swap"
+        chmod 0600 "$state/.swap"
+        mv -f -- "$state/.swap" "$state/task-a.check.sh"
+        ;;
+      altered-check) printf '# tampered\n' >> "$state/task-a.check.sh" ;;
+      swapped-sidecar)
+        cp "$state/task-a.pr-poll" "$state/.swap"
+        chmod 0600 "$state/.swap"
+        mv -f -- "$state/.swap" "$state/task-a.pr-poll"
+        ;;
+      altered-sidecar)
+        printf '%s\n%s\n%s\n%s\n%s\n' github https://github.com/o/r/pull/2 github.com o/r 2 \
+          > "$state/task-a.pr-poll"
+        ;;
+      altered-template-hash)
+        replacement=$(printf 'another template\n' | shasum -a 256 | awk '{print $1}')
+        awk -v hash="$replacement" 'NR == 9 { $0 = hash } { print }' \
+          "$state/task-a.pr-poll-registration" > "$state/.swap"
+        chmod 0600 "$state/.swap"
+        mv -f -- "$state/.swap" "$state/task-a.pr-poll-registration"
+        ;;
+      wrong-mode) chmod 0640 "$state/task-a.check.sh" ;;
+      hardlinked-check) ln "$state/task-a.check.sh" "$dir/check.alias" ;;
+      split-device) ;;
+      foreign-device)
+        cat > "$dir/fakebin/stat" <<'SH'
+#!/usr/bin/env bash
+last=${!#}
+if [ "$last" = "$FM_TEST_FOREIGN_PATH" ]; then
+  case " $* " in
+    *" %d "*) printf '%s\n' "$FM_TEST_FOREIGN_DEVICE"; exit 0 ;;
+  esac
+fi
+exec "$FM_TEST_REAL_STAT" "$@"
+SH
+        chmod +x "$dir/fakebin/stat"
+        ;;
+    esac
+    ! fm_pr_poll_artifacts_valid "$state" task-a "$POLL" \
+      || fail "$mutation fixture was authenticated before any watcher cycle"
+    registration_sha=$(fm_pr_sha256 "$state/task-a.pr-poll-registration")
+    set +e
+    FM_TEST_FOREIGN_PATH="$state/task-a.check.sh" FM_TEST_FOREIGN_DEVICE="$shifted_device" \
+      FM_TEST_REAL_STAT="$REAL_STAT" FM_TEST_GH_LOG="$dir/gh.log" FM_TEST_GH_STATE=MERGED \
+      run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+    rc=$?
+    set -e
+    [ "$rc" -eq 0 ] || fail "$mutation watcher failed: $(cat "$dir/watch.err")"
+    out=$(cat "$dir/watch.out")
+    case "$out" in
+      "check: rejected unauthenticated state checks:"*"task-a.check.sh"*) ;;
+      *) fail "$mutation on a renumbered registration was not refused: $out" ;;
+    esac
+    [ "$(fm_pr_sha256 "$state/task-a.pr-poll-registration")" = "$registration_sha" ] \
+      || fail "$mutation let the watcher re-record the registration"
+    ! grep -F -- '--json state' "$dir/gh.log" >/dev/null 2>&1 \
+      || fail "$mutation ran the refused poll"
+    ! ls "$state"/.fm-pr-poll-registration.* >/dev/null 2>&1 \
+      || fail "$mutation left a staged registration behind"
+  done
+
+  dir=$(make_case device-rerecord-pending-retirement)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+  shift_registration_device "$state" task-a
+  fm_pr_poll_registration_device_shifted "$state" task-a "$POLL" \
+    || fail "pending-retirement fixture was not a device shift before its receipt"
+  : > "$state/task-a.pr-poll-retirement"
+  chmod 0600 "$state/task-a.pr-poll-retirement"
+  ! fm_pr_poll_registration_device_shifted "$state" task-a "$POLL" \
+    || fail "a pending retirement receipt did not keep its artifacts from being re-recorded"
+  ! fm_pr_poll_registration_rerecord_device "$state" task-a "$POLL" \
+    || fail "a pending retirement receipt was re-recorded around"
+  pass "a renumbered registration is never re-recorded around a tampered artifact:$exercised, or a pending retirement"
+}
+
+start_poll_publish_holder() {  # <dir> <state> <id>
+  local dir=$1 state=$2 id=$3 i
+  PR_POLL_HOLDER_ACQUIRED="$dir/poll-publish-holder-acquired"
+  PR_POLL_HOLDER_RELEASE="$dir/poll-publish-holder-release"
+  PR_POLL_HOLDER_LOCK="$state/.pr-poll-publish-$id.lock"
+  cat > "$dir/poll-publish-holder.sh" <<'SH'
+#!/usr/bin/env bash
+set -eu
+. "$FM_TEST_ROOT/bin/fm-wake-lib.sh"
+trap 'fm_lock_release "$FM_TEST_LOCK" || true' EXIT
+fm_lock_acquire_wait "$FM_TEST_LOCK"
+: > "$FM_TEST_ACQUIRED"
+while [ ! -e "$FM_TEST_RELEASE" ]; do sleep 0.01; done
+SH
+  chmod +x "$dir/poll-publish-holder.sh"
+  FM_TEST_ROOT="$ROOT" FM_TEST_LOCK="$PR_POLL_HOLDER_LOCK" \
+    FM_TEST_ACQUIRED="$PR_POLL_HOLDER_ACQUIRED" FM_TEST_RELEASE="$PR_POLL_HOLDER_RELEASE" \
+    "$dir/poll-publish-holder.sh" &
+  PR_POLL_HOLDER_PID=$!
+  for i in $(seq 1 100); do
+    [ -e "$PR_POLL_HOLDER_ACQUIRED" ] && return 0
+    sleep 0.02
+  done
+  kill "$PR_POLL_HOLDER_PID" 2>/dev/null || true
+  wait "$PR_POLL_HOLDER_PID" 2>/dev/null || true
+  fail "poll publication holder did not acquire its lock"
+}
+
+release_poll_publish_holder() {
+  : > "$PR_POLL_HOLDER_RELEASE"
+  wait "$PR_POLL_HOLDER_PID" || fail "poll publication holder did not release its lock"
+}
+
+test_device_rerecord_serializes_direct_rearm() {
+  local dir state url_a url_b i rearm_pid
+  url_a=https://github.com/o/r/pull/1
+  url_b=https://github.com/o/r/pull/2
+  dir=$(make_case device-rerecord-serialized-direct-rearm)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a "$url_a"
+  seed_canonical_poll "$dir" task-a "$url_a"
+  cp "$state/task-a.pr-poll" "$dir/published.pr-poll"
+  cp "$state/task-a.pr-poll-registration" "$dir/published.registration"
+  cp "$state/task-a.check.sh" "$dir/published.check.sh"
+  start_poll_publish_holder "$dir" "$state" task-a
+  FM_ROOT_OVERRIDE="$dir/root" FM_HOME="$dir/home" FM_TEST_GUARD_LOG="$dir/guard.log" \
+    PATH="$dir/fakebin:$BASE_PATH" "$PR_CHECK" task-a "$url_b" > "$dir/rearm.out" 2> "$dir/rearm.err" &
+  rearm_pid=$!
+  for i in $(seq 1 100); do
+    if fm_pr_metadata_identity_parse "$state/task-a.meta" && [ "$FM_PR_META_URL" = "$url_b" ]; then
+      break
+    fi
+    sleep 0.02
+  done
+  [ "$FM_PR_META_URL" = "$url_b" ] || fail "direct re-arm did not rewrite metadata before publication"
+  sleep 1
+  process_is_live_non_zombie "$rearm_pid" || fail "direct re-arm did not wait for poll publication"
+  cmp -s "$dir/published.pr-poll" "$state/task-a.pr-poll" \
+    || fail "blocked direct re-arm replaced the published sidecar"
+  cmp -s "$dir/published.registration" "$state/task-a.pr-poll-registration" \
+    || fail "blocked direct re-arm replaced the published registration"
+  cmp -s "$dir/published.check.sh" "$state/task-a.check.sh" \
+    || fail "blocked direct re-arm replaced the published check"
+  release_poll_publish_holder
+  wait "$rearm_pid" || fail "direct re-arm failed after poll publication release: $(cat "$dir/rearm.err")"
+  fm_pr_poll_artifacts_valid "$state" task-a "$POLL" || fail "released direct re-arm did not publish a strict poll"
+  [ "$(sed -n 4p "$state/task-a.pr-poll-registration")" = "$url_b" ] \
+    || fail "released direct re-arm registration does not name its PR"
+  pass "direct re-arm publication waits without replacing an armed poll"
+}
+
+test_device_rerecord_serializes_rerecord() {
+  local dir state original rc watcher_pid i
+  dir=$(make_case device-rerecord-serialized-rerecord)
+  state="$dir/home/state"
+  write_poll_meta "$state" task-a https://github.com/o/r/pull/1
+  seed_canonical_poll "$dir" task-a https://github.com/o/r/pull/1
+  cp "$state/task-a.pr-poll-registration" "$dir/registration.original"
+  shift_registration_device "$state" task-a
+  original=$(fm_pr_sha256 "$state/task-a.pr-poll-registration")
+  add_stop_custom_check "$dir"
+  cat > "$dir/fakebin/mv" <<'SH'
+#!/usr/bin/env bash
+case " $* " in
+  *"task-a.pr-poll-registration "*)
+    [ -d "$FM_TEST_CONTROL_LOCK" ] || exit 91
+    [ -d "$FM_TEST_POLL_PUBLISH_LOCK" ] || exit 92
+    : > "$FM_TEST_REGISTRATION_RENAMED"
+    ;;
+esac
+exec "$FM_TEST_REAL_MV" "$@"
+SH
+  chmod +x "$dir/fakebin/mv"
+  start_poll_publish_holder "$dir" "$state" task-a
+  FM_TEST_CONTROL_LOCK="$state/.control-task-a.lock" \
+    FM_TEST_POLL_PUBLISH_LOCK="$state/.pr-poll-publish-task-a.lock" \
+    FM_TEST_REGISTRATION_RENAMED="$dir/registration-renamed" FM_TEST_REAL_MV="$REAL_MV" \
+    FM_TEST_GH_LOG="$dir/gh.log" FM_TEST_GH_STATE=OPEN \
+    run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err" &
+  watcher_pid=$!
+  for i in $(seq 1 100); do
+    [ -d "$state/.control-task-a.lock" ] && break
+    sleep 0.02
+  done
+  [ -d "$state/.control-task-a.lock" ] || fail "watcher did not reach its device re-record"
+  sleep 1
+  process_is_live_non_zombie "$watcher_pid" || fail "watcher did not wait for poll publication"
+  [ "$(fm_pr_sha256 "$state/task-a.pr-poll-registration")" = "$original" ] \
+    || fail "blocked watcher rewrote a device-shifted registration"
+  [ ! -e "$dir/registration-renamed" ] || fail "blocked watcher renamed the registration"
+  release_poll_publish_holder
+  rc=0
+  wait "$watcher_pid" || rc=$?
+  [ "$rc" -eq 0 ] || fail "released watcher re-record failed: $(cat "$dir/watch.err")"
+  [ -e "$dir/registration-renamed" ] || fail "released watcher did not replace the registration"
+  cmp -s "$dir/registration.original" "$state/task-a.pr-poll-registration" \
+    || fail "released watcher did not restore the live-device registration"
+  fm_pr_poll_artifacts_valid "$state" task-a "$POLL" || fail "released watcher did not strictly authenticate the poll"
+  pass "device re-record publication waits without rewriting its registration"
+}
+
 test_parser_matrix
 test_gitlab_merge_watch
 test_merged_poll_retires_once
 test_merged_poll_reregistration_after_notification_is_absorbed
 test_merged_poll_retries_a_failed_upward_report
 test_self_merge_and_poll_publish_one_outcome
+test_merged_poll_row_carries_the_merge_authority
+test_merged_poll_row_names_no_authority_when_no_record_grants_one
+test_authority_persistence_refuses_rebound_metadata
+test_authority_persists_before_control_unlock
+test_teardown_cannot_race_authority_consumption
+test_authority_retirement_preserves_replacement
 test_merged_poll_reports_upward_from_a_secondmate_home_once
 test_different_merged_pr_for_same_task_is_not_absorbed
 test_persistent_secondmate_retirement_is_poll_only
@@ -2141,6 +3065,9 @@ test_external_merge_transition_retires_only_terminal_poll
 test_retirement_refuses_replacement_and_nonterminal_results
 test_retirement_queue_failure_and_receipt_tampering
 test_gitlab_merged_poll_retires
+test_azure_devops_merge_watch
+test_azure_devops_merged_poll_retires
+test_azure_devops_abandoned_poll_stays_armed
 test_invalid_entrypoints_have_zero_side_effects
 test_valid_recording_and_merge_derivation
 test_rejected_metacharacter_bytes_are_inert
@@ -2149,6 +3076,10 @@ test_atomic_interruption_leaves_no_partial_artifact
 test_concurrent_watcher_sees_only_complete_publication
 test_poll_publication_refuses_unsafe_destinations
 test_live_artifact_single_link_and_privacy_validation
+test_device_renumbered_poll_stays_armed
+test_device_rerecord_refuses_tampered_artifacts
+test_device_rerecord_serializes_direct_rearm
+test_device_rerecord_serializes_rerecord
 test_postrename_poll_validation_revokes_and_retries
 test_bootstrap_leaves_unauthenticated_checks
 test_custom_snapshot_cleanup_on_signal
