@@ -1,0 +1,64 @@
+Unable to find image 'node:22-bookworm' locally
+22-bookworm: Pulling from library/node
+450fe15cad1e: Pulling fs layer
+e528fa46febd: Pulling fs layer
+328a0fa474a1: Pulling fs layer
+4d3ba406c16b: Pulling fs layer
+df80b7e36caf: Pulling fs layer
+67ff4665dd81: Pulling fs layer
+257103b1b1da: Pulling fs layer
+20c3cebe9eb0: Pulling fs layer
+df80b7e36caf: Waiting
+67ff4665dd81: Waiting
+257103b1b1da: Waiting
+20c3cebe9eb0: Waiting
+4d3ba406c16b: Waiting
+e528fa46febd: Verifying Checksum
+e528fa46febd: Download complete
+328a0fa474a1: Verifying Checksum
+328a0fa474a1: Download complete
+450fe15cad1e: Verifying Checksum
+450fe15cad1e: Download complete
+df80b7e36caf: Download complete
+257103b1b1da: Download complete
+20c3cebe9eb0: Verifying Checksum
+20c3cebe9eb0: Download complete
+67ff4665dd81: Verifying Checksum
+67ff4665dd81: Download complete
+450fe15cad1e: Pull complete
+e528fa46febd: Pull complete
+4d3ba406c16b: Verifying Checksum
+4d3ba406c16b: Download complete
+328a0fa474a1: Pull complete
+4d3ba406c16b: Pull complete
+df80b7e36caf: Pull complete
+67ff4665dd81: Pull complete
+257103b1b1da: Pull complete
+20c3cebe9eb0: Pull complete
+Digest: sha256:363e1587494626837fa7f9a23bdb453d13b0ff3c67c705c2805cfc69c2d2fad7
+Status: Downloaded newer image for node:22-bookworm
+bash: GNU bash, version 5.2.15(1)-release (aarch64-unknown-linux-gnu)
+jq: jq-1.6  tasks-axi: 0.2.6
+commit: n/a
+ok - return catch-up owns live blocker remediation, reports itself to Bearings as content, preserves evidence once, and clears idempotently
+ok - tmux and Herdr blockers require the same explicit durable reclassification before ordinary work
+ok - needs-decision remains reportable without masquerading as a firstmate-actionable blocker
+ok - AFK return re-drains published wakes until handling acknowledges
+ok - away-mode re-entry fails closed while the prior return catch-up is pending
+ok - /quiet off's return path behaves identically for a quiet-content flag as for a legacy away-content one
+ok - check retries recorded terminal teardown and keeps catch-up gated until success
+ok - an unreadable superseded mandate stays required until its record validates
+ok - the retained contract epoch requires its final archive on every check
+ok - the return brief renders health, mandate, waiting, could-not-fix, handled, and cost from durable records, and the gate shrinks to what the away session could not fix
+ok - a refreshed posture keeps its original window, superseded mandate, and earlier outcomes
+ok - a malformed posture record stays live and gates return catch-up
+ok - an epochless malformed record remains required until restored valid
+ok - an unreadable outcome store gates catch-up until a successful reread
+ok - an unavailable held listing gates catch-up until a successful reread
+ok - an unreadable status stays private and gates until a successful reread
+ok - the read-only guard treats the away-posture record as active away mode without the legacy flag
+ok - the return brief leads with supervisor health and names every detected gap
+ok - the return brief does not report an already-acked watcher-down marker as an open gap
+ok - a return with only the legacy away flag still renders the brief and measures the window from the flag
+ok - the return brief lists a wait declared on the captain under waiting on you
+suite exit=0

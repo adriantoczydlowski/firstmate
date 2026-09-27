@@ -1,0 +1,36 @@
+=== [target-522a1d3] root=/Users/adriantoczydlowski/.no-mistakes/worktrees/b0d3d72ad777/01M3FZV2DC1NFSCW7GYM55QWD1
+=== [target-522a1d3] FM_PAUSE_RESURFACE_SECS_DEFAULT=14400 (demo cadence 240s)
+
+--- [target-522a1d3] scenario 1: three tasks parked on a wait on the captain, attended mode (no away record)
+--- [target-522a1d3] phase 1: let each wait surface its first sighting
+    round 1: watcher exited with reason line(s):
+        stale: test:fm-gwk-round3-oferta-akademia (paused 501s, awaiting the captain - the wait names the captain, surfaced once and not rechecked; answer the wait or release it)
+    round 2: watcher exited with reason line(s):
+        stale: test:fm-gwk-round4-tickets-seats (paused 504s, awaiting the captain - the wait names the captain, surfaced once and not rechecked; answer the wait or release it)
+    round 3: watcher exited with reason line(s):
+        stale: test:fm-remove-entry-hour-gates (paused 507s, awaiting the captain - the wait names the captain, surfaced once and not rechecked; answer the wait or release it)
+wait_for_exit: owned pid 84776 exceeded 100 polls; sending TERM
+84776 70928 S    bash /Users/adriantoczydlowski/.no-mistakes/worktrees/b0d3d72ad777/01M3FZV2DC1NFSCW7GYM55QWD1/bin/fm-watch.sh
+    round 4: watcher stayed quiet through its budget (nothing left to surface)
+--- [target-522a1d3] phase 2: age every recheck throttle on staggered clocks far past the 240s cadence
+    throttle for fm-remove-entry-hour-gates aged to 5000s (contents: declared:r1:3835007374726f6e673a31363737...)
+    throttle for fm-gwk-round3-oferta-akademia aged to 5170s (contents: declared:r1:3839007374726f6e673a31363737...)
+    throttle for fm-gwk-round4-tickets-seats aged to 5340s (contents: declared:r1:3839007374726f6e673a31363737...)
+    watcher still running after 4 full poll cycles: no wake sent to the captain
+    recheck wake rows appended in phase 2: 0
+    triage log tail:
+        [2026-09-27T02:53:03+0200] absorbed stale (paused on the captain, age 540s): test:fm-gwk-round4-tickets-seats
+        [2026-09-27T02:53:03+0200] absorbed stale (paused on the captain, age 540s): test:fm-remove-entry-hour-gates
+        [2026-09-27T02:53:05+0200] absorbed stale (paused on the captain, age 542s): test:fm-gwk-round3-oferta-akademia
+        [2026-09-27T02:53:05+0200] absorbed stale (paused on the captain, age 542s): test:fm-gwk-round4-tickets-seats
+        [2026-09-27T02:53:05+0200] absorbed stale (paused on the captain, age 542s): test:fm-remove-entry-hour-gates
+        [2026-09-27T02:53:07+0200] absorbed stale (paused on the captain, age 544s): test:fm-gwk-round3-oferta-akademia
+
+--- [target-522a1d3] scenario 2 (control): one task parked on an EXTERNAL wait, same cadence
+    phase 1: first sighting:
+        stale: test:fm-upstream-release-wait (paused 501s, awaiting external - declared pause, rechecked on a long cadence not a wedge; confirm the wait still holds)
+    throttle aged to 5000s
+    phase 2: watcher EXITED with the recheck (expected for an external wait):
+        stale: test:fm-upstream-release-wait (paused 502s, awaiting external - declared pause, rechecked on a long cadence not a wedge; confirm the wait still holds)
+
+=== [target-522a1d3] RESULT: captain-wait recheck wakes in phase 2 = 0 (want 0); external-wait recheck delivered = 1 (want 1)
