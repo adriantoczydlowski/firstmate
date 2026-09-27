@@ -2711,6 +2711,108 @@ test_wait_on_captain_with_a_dead_agent_still_surfaces_once() {
   pass "a dead agent under a wait on the captain surfaces once and is never rechecked after it"
 }
 
+# A secondmate's wait on the captain under quiet mode: the legacy away flag with
+# no away-posture record, so the daemon owns triage. The mate's stale poll used
+# to take the declared-wait absorb ahead of the daemon hand-off, which queued a
+# decorated wake and armed the throttle as it queued; the daemon then read that
+# throttle as a delivered sighting and self-handled the wake, so the declaration
+# was never seen in any posture. Driven through the real watcher and the daemon's
+# wake handler: the hand-off is the plain one-shot ordinary crews get, the daemon
+# delivers the one sighting and arms the throttle, a later hand-off adds nothing,
+# and /quiet off leaves the same declaration alone.
+test_secondmate_wait_on_captain_under_quiet_mode_is_surfaced_once() {
+  local dir state fakebin out capture_file statusf window key sig pid wakes throttle n
+  dir=$(make_case quiet-secondmate-wait-on-captain); state="$dir/state"; fakebin="$dir/fakebin"
+  out="$dir/watch.out"; capture_file="$dir/pane.txt"; statusf="$state/mate.status"
+  window="test:fm-mate"
+  printf 'idle awaiting the captain\n' > "$capture_file"
+  printf 'window=%s\nkind=secondmate\n' "$window" > "$state/mate.meta"
+  printf 'paused [on=captain]: awaiting the captain on the merge word\n' > "$statusf"
+  set_mtime "$(( $(date +%s) - 500 ))" "$statusf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-mate_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  throttle="$state/.paused-resurfaced-$key"
+  printf '%s' "$(hash_text 'idle awaiting the captain')" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  date '+%s' > "$state/.afk"
+  export FM_FAKE_CREW_STATE='state: unknown · source: none · no current-state source available'
+  daemon_wake() {  # <reason>
+    (
+      export FM_TEST_DAEMON_SOURCED=1 FM_DAEMON_PRIMARY_HARNESS=claude \
+        FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999
+      # shellcheck source=/dev/null
+      . "$ROOT/bin/fm-supervise-daemon.sh"
+      handle_wake "$1" "$state"
+    )
+  }
+  escalations() { [ -s "$state/.subsuper-escalations" ] && wc -l < "$state/.subsuper-escalations" | tr -d ' ' || echo 0; }
+  handed_off() {
+    awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w && $5 == "stale: " w { n++ } END { print n + 0 }' \
+      "$state/.wake-queue" 2>/dev/null || echo 0
+  }
+
+  # Phase A: the watcher hands the mate's wait to the daemon as the plain
+  # one-shot and arms nothing itself; the daemon delivers the one sighting.
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=zsh \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 100 \
+    || { reap "$pid"; fail "a secondmate's wait on the captain was not handed to the daemon under quiet mode: $(cat "$out")"; }
+  wakes=$(handed_off)
+  [ "$wakes" -eq 1 ] \
+    || fail "expected one plain stale hand-off of the mate's wait, found $wakes: $(cat "$state/.wake-queue" 2>/dev/null || true)"
+  [ ! -e "$throttle" ] || fail "the watcher armed the throttle for a wake it only queued to the daemon"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the hand-off"
+  daemon_wake "$(head -1 "$out")"
+  n=$(escalations)
+  [ "$n" = 1 ] \
+    || fail "the daemon delivered $n sighting(s) of the mate's wait, expected exactly one: $(cat "$state/.subsuper-escalations" 2>/dev/null || true)"
+  grep -F "awaiting the captain" "$state/.subsuper-escalations" >/dev/null \
+    || fail "the sighting does not name the captain: $(cat "$state/.subsuper-escalations")"
+  [ "$(cat "$throttle" 2>/dev/null || true)" = "$(status_wait_declaration_scope "$statusf")" ] \
+    || fail "the daemon's sighting did not record the declaration against the throttle"
+
+  # Phase B: a new pane hash is handed off again, and the daemon adds nothing.
+  printf 'idle awaiting the captain, tick\n' > "$capture_file"
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_WATCH_HANDLING_SUCCESSOR=1 \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 100 \
+    || { reap "$pid"; fail "a new pane hash under the mate's wait was not handed off: $(cat "$out")"; }
+  wakes=$(handed_off)
+  [ "$wakes" -eq 1 ] || fail "expected one plain hand-off for the new hash since the last acknowledgement, found $wakes"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the second hand-off"
+  daemon_wake "$(head -1 "$out")"
+  n=$(escalations)
+  [ "$n" = 1 ] || fail "a later hand-off of the same declaration was surfaced again ($n escalations)"
+
+  # Phase C: /quiet off. The always-on watcher reads the throttle the daemon
+  # armed and leaves the same declaration alone.
+  rm -f "$state/.afk"
+  printf 'idle awaiting the captain, tock\n' > "$capture_file"
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_WATCH_HANDLING_SUCCESSOR=1 \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_poll_cycle "$state" "$pid" || ! wait_poll_cycle "$state" "$pid" || ! wait_poll_cycle "$state" "$pid"; then
+    reap "$pid"; fail "after /quiet off the watcher surfaced a mate's wait the daemon already delivered: $(cat "$out")"
+  fi
+  [ ! -s "$out" ] || fail "after /quiet off the watcher printed a wake for an already delivered declaration: $(cat "$out")"
+  wakes=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w { n++ } END { print n + 0 }' "$state/.wake-queue" 2>/dev/null || echo 0)
+  [ "$wakes" -eq 0 ] || fail "after /quiet off the mate's wait was queued again ($wakes stale rows)"
+  reap "$pid"
+  unset FM_FAKE_CREW_STATE
+  unset -f daemon_wake escalations handed_off
+  pass "a secondmate's wait on the captain under quiet mode is handed to the daemon, surfaced exactly once, and never rechecked after it"
+}
+
 test_live_paused_until_controls_recheck_time() {
   local dir state fakebin out capture_file statusf window key sig wakes future past
   dir=$(make_case live-paused-until); state="$dir/state"; fakebin="$dir/fakebin"
@@ -6228,6 +6330,7 @@ test_absorbed_replacement_wait_does_not_inherit_the_old_throttle
 test_live_declared_wait_churn_honors_the_resurface_throttle
 test_production_default_pause_cadence_is_hours_not_minutes
 test_wait_on_captain_with_a_dead_agent_still_surfaces_once
+test_secondmate_wait_on_captain_under_quiet_mode_is_surfaced_once
 test_live_paused_until_controls_recheck_time
 test_wedge_threshold_defers_to_a_declared_wait_under_a_working_verdict
 test_wedge_threshold_never_rechecks_a_lane_the_captain_owns

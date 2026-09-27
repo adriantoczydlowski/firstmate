@@ -2720,7 +2720,7 @@ EOF
       if [ "$n" -ge 2 ] && [ "$busy_now" -ne 0 ]; then
         # The pane is idle/stale at hash $h. Triage decides whether this wakes
         # firstmate. Detection itself is unchanged from above.
-        if [ "$kind" = secondmate ]; then
+        if [ "$kind" = secondmate ] && ! { afk_present && status_wait_on_captain "$last"; }; then
           case "$(pause_state_class "$w" "$task")" in
             paused) handle_paused_stale "$w" "$task" "$h" ;;
             *)      clear_pause_tracking "$key" ;;
@@ -2730,7 +2730,11 @@ EOF
           # except that a pane waiting on the captain is never handed over while
           # the away-posture record exists (wait_on_captain_silenced). In quiet
           # mode there is no such record, so the pane is handed over and the
-          # daemon applies the same never-rechecked rule this file does.
+          # daemon applies the same never-rechecked rule this file does. A
+          # secondmate's wait on the captain joins this hand-off rather than the
+          # declared-wait absorb above: that absorb records the throttle as it
+          # queues, and a wake queued to the daemon is not yet a delivered
+          # sighting, so the daemon must read the throttle unarmed to deliver it.
           if wait_on_captain_silenced "$last"; then
             printf '%s' "$h" > "$sf"
             wait_on_captain_absorb_record "$key" "$task"
