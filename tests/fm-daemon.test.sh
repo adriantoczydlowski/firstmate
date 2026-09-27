@@ -1024,7 +1024,7 @@ test_wait_on_captain_first_sight_escalates_once_under_quiet_mode() {
   local dir state fakebin task win pane key watcher_key statusf n
   dir=$(make_supercase quiet-first-sight)
   state="$dir/state"; fakebin="$dir/fakebin"
-  task=held-w16; win="sess:fm-$task"; pane="$dir/pane.txt"; statusf="$state/$task.status"
+  task='held-w16'; win="sess:fm-$task"; pane="$dir/pane.txt"; statusf="$state/$task.status"
   key=$(printf '%s' "$task" | tr ':/.' '___')
   watcher_key=$(printf '%s' "$win" | tr ':/.' '___')
   fm_write_meta "$state/$task.meta" "window=$win" "worktree=$dir/wt" "kind=ship" "harness=pi"
