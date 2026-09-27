@@ -513,7 +513,7 @@ pause_marker_record() {  # <window> <state> - create if absent
 pause_marker_remove() {  # <window> <state>
   local win=$1 state=$2 key
   key=$(_stale_key "$(window_to_task "$win" "$state")")
-  rm -f "$state/.subsuper-paused-$key" "$state/.subsuper-pause-until-due-$key"
+  rm -f "$state/.subsuper-paused-$key" "$state/.subsuper-pause-until-due-$key" "$state/.subsuper-paused-owner-$key"
 }
 
 # The daemon's one sighting of a wait a WORKER declared on the captain (a paused:
@@ -527,7 +527,11 @@ pause_marker_remove() {  # <window> <state>
 # the hold was its sighting. Called before the pause marker is recorded: the
 # sighting is owed when the wait is first recorded (no marker yet) or when a
 # recorded declaration has been replaced, never while the marker stands with
-# nothing recorded against it. The throttle is the watcher's own
+# nothing recorded against it. reconcile_pause_tracking keeps that marker
+# specific: one that stood for an external wait is dropped when the declaration
+# moves onto the captain, and the marker for a captain wait is recorded only
+# once the sighting was delivered (a failed delivery returns 1 and is retried at
+# the next sight). The throttle is the watcher's own
 # .paused-resurfaced-<key>, keyed to the shared declaration scope, so a wait the
 # always-on watcher already surfaced is not repeated on /quiet on and one
 # surfaced here is not repeated on /quiet off. Under the away posture the
@@ -552,7 +556,9 @@ wait_on_captain_first_sight() {  # <window> <state> <last-status-line>
   if [ -e "$state/.subsuper-paused-$key" ] && [ -z "$recorded" ]; then return 0; fi
   if escalate_add "$state" "paused (awaiting the captain, the wait names the captain, surfaced once and not rechecked; answer the wait or release it): $win"; then
     printf '%s' "$scope" > "$throttle"
+    return 0
   fi
+  return 1
 }
 
 clear_pause_tracking() {  # <window> <state>
@@ -560,23 +566,31 @@ clear_pause_tracking() {  # <window> <state>
   task=$(window_to_task "$win" "$state")
   key=$(_stale_key "$task")
   watcher_key=$(_stale_key "$win")
-  rm -f "$state/.subsuper-paused-$key" "$state/.subsuper-pause-until-due-$key" "$state/.subsuper-stale-$key" \
-    "$state/.paused-$watcher_key" "$state/.paused-rechecked-$watcher_key" "$state/.paused-resurfaced-$watcher_key" \
+  rm -f "$state/.subsuper-paused-$key" "$state/.subsuper-pause-until-due-$key" "$state/.subsuper-paused-owner-$key" \
+    "$state/.subsuper-stale-$key" "$state/.paused-$watcher_key" "$state/.paused-rechecked-$watcher_key" "$state/.paused-resurfaced-$watcher_key" \
     "$state/.stale-$watcher_key" "$state/.stale-since-$watcher_key" "$state/.wedge-escalations-$watcher_key" \
     "$state/.writing-since-$watcher_key" "$state/.writing-resurfaced-$watcher_key" \
     "$state/.waiting-resurfaced-$watcher_key"
 }
 
 reconcile_pause_tracking() {  # <window> <state> <last-status-line>
-  local win=$1 state=$2 last=$3 task key marker watcher_key
+  local win=$1 state=$2 last=$3 task key marker owner_file owner watcher_key
   task=$(window_to_task "$win" "$state")
   key=$(_stale_key "$task")
   marker="$state/.subsuper-paused-$key"
+  owner_file="$state/.subsuper-paused-owner-$key"
   watcher_key=$(_stale_key "$win")
   if status_is_paused_or_captain_held "$last"; then
     stale_marker_remove "$win" "$state"
-    wait_on_captain_first_sight "$win" "$state" "$last"
-    pause_marker_record "$win" "$state"
+    owner=external
+    if status_wait_on_captain "$last" && ! status_is_captain_held "$last"; then owner=captain; fi
+    if [ "$owner" = captain ] && [ -e "$marker" ] && [ "$(cat "$owner_file" 2>/dev/null || true)" = external ]; then
+      rm -f "$marker" "$state/.subsuper-pause-until-due-$key"
+    fi
+    if wait_on_captain_first_sight "$win" "$state" "$last"; then
+      pause_marker_record "$win" "$state"
+      printf '%s' "$owner" > "$owner_file"
+    fi
   elif [ -e "$marker" ] || [ -e "$state/.paused-$watcher_key" ]; then
     clear_pause_tracking "$win" "$state"
   fi
@@ -1482,10 +1496,8 @@ handle_wake() {  # <reason> <state>
       # wedge stale marker, so a pane that transitioned working->declared-wait is not
       # still wedge-aged. Only stale produces this action.
       if [ "$kind" = "stale" ]; then
-        stale_marker_remove "$arg" "$state"
         task=$(window_to_task "$arg" "$state")
-        wait_on_captain_first_sight "$arg" "$state" "$(last_status_line "$state/$task.status")"
-        pause_marker_record "$arg" "$state"
+        reconcile_pause_tracking "$arg" "$state" "$(last_status_line "$state/$task.status")"
       fi
       log "self-handle (paused): $reason -> $distilled"
       ;;

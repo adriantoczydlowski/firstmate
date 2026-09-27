@@ -1015,9 +1015,11 @@ test_housekeeping_wait_on_captain_is_never_rechecked() {
 # that follows and an overdue housekeeping tick add nothing, a re-declaration
 # earns its own single sighting, the away posture stays silent (the return brief
 # lists it) and records the declaration so the return surfaces nothing more, a
-# declaration the always-on watcher already surfaced is not
-# repeated, and a captain-held transfer - firstmate's own append - is not
-# surfaced here at all.
+# declaration the always-on watcher already surfaced is not repeated, a
+# captain-held transfer - firstmate's own append - is not surfaced here at all,
+# an external wait that moves onto the captain gets the captain declaration's
+# one sighting, and a sighting whose delivery failed is retried rather than
+# silenced.
 test_wait_on_captain_first_sight_escalates_once_under_quiet_mode() {
   local dir state fakebin task win pane key watcher_key statusf n
   dir=$(make_supercase quiet-first-sight)
@@ -1088,6 +1090,48 @@ test_wait_on_captain_first_sight_escalates_once_under_quiet_mode() {
   FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 handle_wake "stale: sess:fm-held-w16h" "$state"
   n=$(escalations)
   [ "$n" = 2 ] || fail "a captain-held transfer was surfaced as a first sight ($n escalations): $(cat "$state/.subsuper-escalations")"
+
+  # An external wait that moves onto the captain: the marker the external wait
+  # recorded must not pass for a sighting of the captain declaration.
+  fm_write_meta "$state/held-w16x.meta" "window=sess:fm-held-w16x" "worktree=$dir/wt" "kind=ship" "harness=pi"
+  printf 'paused: awaiting the upstream release\n' > "$state/held-w16x.status"
+  FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 handle_wake "signal: $state/held-w16x.status" "$state"
+  FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 handle_wake "stale: sess:fm-held-w16x" "$state"
+  n=$(escalations)
+  [ "$n" = 2 ] || fail "an external wait was surfaced as a wait on the captain ($n escalations): $(cat "$state/.subsuper-escalations")"
+  [ -e "$state/.subsuper-paused-$(printf '%s' held-w16x | tr ':/.' '___')" ] \
+    || fail "the external wait did not record its pause marker, so this step pins nothing about the transition"
+  printf 'paused [on=captain]: awaiting the captain on the merge word\n' >> "$state/held-w16x.status"
+  FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 handle_wake "signal: $state/held-w16x.status" "$state"
+  n=$(escalations)
+  [ "$n" = 3 ] || fail "a captain wait declared after an external wait was not surfaced ($n escalations): $(cat "$state/.subsuper-escalations")"
+  FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 handle_wake "stale: sess:fm-held-w16x" "$state"
+  echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$(printf '%s' held-w16x | tr ':/.' '___')"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="sess:fm-held-w16x" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
+  n=$(escalations)
+  [ "$n" = 3 ] || fail "the captain wait that followed an external wait was surfaced again ($n escalations): $(cat "$state/.subsuper-escalations")"
+
+  # A sighting whose delivery failed is retried at the next sight, not silenced
+  # behind a marker recorded for a wait nobody was told about.
+  dir=$(make_supercase quiet-first-sight-retry)
+  state="$dir/state"
+  fm_write_meta "$state/held-w16r.meta" "window=sess:fm-held-w16r" "worktree=$dir/wt" "kind=ship" "harness=pi"
+  printf 'paused [on=captain]: awaiting the captain on the merge word\n' > "$state/held-w16r.status"
+  afk_enter "$state"
+  mkdir "$state/.subsuper-escalations"
+  FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 handle_wake "signal: $state/held-w16r.status" "$state" 2>/dev/null
+  [ ! -e "$state/.subsuper-paused-$(printf '%s' held-w16r | tr ':/.' '___')" ] \
+    || fail "a sighting that could not be delivered still recorded the pause marker, silencing the wait for good"
+  rmdir "$state/.subsuper-escalations"
+  FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 handle_wake "stale: sess:fm-held-w16r" "$state"
+  n=$(escalations)
+  [ "$n" = 1 ] || fail "a sighting whose delivery failed was not retried at the next sight ($n escalations)"
+  [ -e "$state/.subsuper-paused-$(printf '%s' held-w16r | tr ':/.' '___')" ] \
+    || fail "the delivered retry did not record the pause marker"
+  FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 handle_wake "stale: sess:fm-held-w16r" "$state"
+  n=$(escalations)
+  [ "$n" = 1 ] || fail "the retried sighting was surfaced again ($n escalations)"
   unset -f escalations
   pass "a wait declared on the captain is escalated exactly once per declaration under quiet mode and never under the away posture"
 }
