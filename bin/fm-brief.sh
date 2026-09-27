@@ -100,6 +100,12 @@ esac
 . "$SCRIPT_DIR/fm-dod-lib.sh"
 PAUSED_VERB=${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}
 CREWMATE_PAUSE_WAIT_EXAMPLES='an upstream release, a rate-limit reset, a scheduled window, or your own validation round'
+WAIT_ON_CAPTAIN_TAG=${FM_CLASSIFY_WAIT_ON_CAPTAIN_TAG:-$FM_CLASSIFY_WAIT_ON_CAPTAIN_TAG_DEFAULT}
+# The one worker-facing spelling of the wait-owner marker. fm-classify-lib.sh's
+# status_wait_on_captain owns what it means; this only tells a worker when to
+# write it, because a supervisor cannot tell a wait on the captain from a wait on
+# the world by reading the wait's prose.
+CREWMATE_PAUSE_ON_CAPTAIN="When the captain already holds the work and only their own act can end the wait - a project they deferred, a hold they took, a merge word they owe - write it as \`$PAUSED_VERB $WAIT_ON_CAPTAIN_TAG: {why}\`, and firstmate stops rechecking a wait nobody but the captain can end. A decision you have not yet asked is not such a wait: append \`needs-decision [at=<epoch>]: {summary of options}\` for it instead, so it stays open until it is answered."
 
 resolve_directory_input() {
   local name=$1 path=$2 resolved
@@ -292,6 +298,7 @@ Report only true captain-relevant outcomes or a declared external wait by append
 States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
 Substitute \`<epoch>\` with the current Unix time in seconds - run \`date +%s\` and write the number it printed; a stamp that is not plain digits records no time at all.
 Use \`$PAUSED_VERB: {why}\` (distinct from \`blocked:\`) only when your domain is deliberately idling on a known external wait you expect to clear on its own, naming when it clears with \`until <YYYY-MM-DDTHH:MMZ>\` (UTC) when you know; use \`blocked:\` when you are stuck and need firstmate to act.
+$CREWMATE_PAUSE_ON_CAPTAIN
 Use this only for material phase changes, a captain decision, a real blocker, a failure, work ready for review, or work you landed.
 Work you landed includes a merge you performed yourself under standing merge authority and one the captain merged on the forge: under that authority nothing is ever \"ready for review\", so a landed merge that goes unreported reaches the captain as silence.
 This is also how you return the answer to a marked from-firstmate request above.
@@ -401,6 +408,7 @@ The report is the only thing that survives, so anything worth keeping must be in
    firstmate then leaves your idle pane alone and rechecks it on a long cadence instead of
    treating it as a possible wedge. When you know when the wait clears, say so in the line with
    \`until <YYYY-MM-DDTHH:MMZ>\` (UTC) and firstmate rechecks at that time instead.
+   $CREWMATE_PAUSE_ON_CAPTAIN
    Use \`blocked:\` when you are stuck and need help.
 5. If you hit the same obstacle twice, append \`blocked [at=<epoch>]: {why}\` and stop; firstmate will help.
 6. If a decision belongs to a human (product choices, destructive actions),
@@ -490,7 +498,9 @@ $RULE1
    Use \`$PAUSED_VERB: {why}\` - distinct from \`blocked:\` - ONLY when you are deliberately idling on a
    known external wait you expect to clear on its own ($CREWMATE_PAUSE_WAIT_EXAMPLES):
    firstmate then leaves your idle pane alone and rechecks it on a long
-   cadence instead of treating it as a possible wedge. Use \`blocked:\` when you are stuck and need help.
+   cadence instead of treating it as a possible wedge.
+   $CREWMATE_PAUSE_ON_CAPTAIN
+   Use \`blocked:\` when you are stuck and need help.
 5. If you hit the same obstacle twice, append \`blocked [at=<epoch>]: {why}\` and stop; firstmate will help.
 6. If a decision belongs above the implementation worker (product choices, destructive actions),
    append \`needs-decision [at=<epoch>]: {summary of options}\` and stop. Firstmate will reply with the decision.

@@ -13,9 +13,10 @@
 # although its initial no-verb status signal still surfaces in normal mode.
 # That cadence is hours long and condition-aware: a paused: line naming
 # `until <UTC ISO 8601>` is rechecked when that time passes, but a declared time
-# beyond FM_PAUSE_RESURFACE_SECS cannot extend the ordinary recheck cadence, and
-# while the away-posture record (state/.afk-contract) exists an
-# item held for the captain is never rechecked at all, in either posture.
+# beyond FM_PAUSE_RESURFACE_SECS cannot extend the ordinary recheck cadence.
+# A wait on the captain is outside that cadence in either posture: it is
+# surfaced once per declaration and never rechecked, and while the away-posture
+# record (state/.afk-contract) exists it is not surfaced at all.
 # While state/.afk exists, the daemon owns triage and this watcher queues and exits
 # on every wake. Printed reason lines:
 #   signal: <file>...      status/turn-end signals, surfaced when a listed status
@@ -53,6 +54,9 @@
 #                          the run step cannot show; that deferral still
 #                          re-surfaces once per PAUSE_RESURFACE_SECS, and a pane
 #                          that writes nothing keeps the unchanged schedule.
+#                          A pane whose own declared wait is on the captain is
+#                          deferred with no recheck behind it at all, because
+#                          only the captain can end that wait.
 #                          A pane whose recorded endpoint holds no agent at all is
 #                          not a wedge and is reported ONCE instead of escalating
 #                          on that cadence forever (wedge_dead_record); only the
@@ -295,8 +299,17 @@ case "$SECONDMATE_WAKE_STALL_SECS" in ''|*[!0-9]*|0) SECONDMATE_WAKE_STALL_SECS=
 # (pause_state_class owns that split).
 # These cases re-surface once for a recheck every PAUSE_RESURFACE_SECS - far
 # longer than the wedge threshold, but finite so a forgotten wait cannot rot
-# invisibly - except an item held for the captain while the away-posture record
-# exists, which is never rechecked (afk_record_present below).
+# invisibly - except a wait on the captain (fm-classify-lib.sh's
+# status_wait_on_captain owns which declarations qualify), which has no cadence
+# at all. That is not a longer window: such a wait is surfaced once per distinct
+# declaration and then left alone for as long as that declaration stands,
+# however many hours or days that is. A recheck asks whether a wait still holds,
+# and the answer for a wait the captain has not yet ended is always yes, so
+# repeating the question only spends the captain's attention on work they
+# already have in hand (the 2026-09-26 audit: three parked tasks, three
+# staggered clocks, wakes minutes apart every hour, nothing new in any of them).
+# It applies in BOTH postures; the away record adds absolute silence on top of
+# it (wait_on_captain_silenced below), never a different cadence.
 PAUSE_RESURFACE_SECS=${FM_PAUSE_RESURFACE_SECS:-$FM_PAUSE_RESURFACE_SECS_DEFAULT}
 # A declared wait that names WHEN it clears (`paused: ... until <UTC ISO 8601>`,
 # status_paused_until in fm-classify-lib.sh) is condition-aware: it is not
@@ -322,18 +335,27 @@ _event_cap_fails=0
 afk_present() { [ -e "$STATE/.afk" ]; }
 
 # afk_record_present: 0 while the away-posture record exists (the captain is
-# away, in either supervision shape). While it exists an item held for the
-# captain is never rechecked: there is nobody to answer it, the return brief
-# lists it, and a recheck would only churn (the 2026-09-07 away-window audit
-# counted hourly rechecks of captain-held items as pure noise). Declared
-# external waits keep their condition-aware cadence in both postures.
+# away, in either supervision shape). While it exists a wait on the captain is
+# not surfaced even once: there is nobody to answer it, the return brief lists
+# it, and the sighting would only churn. Declared external waits keep their
+# condition-aware cadence in both postures.
 afk_record_present() { fm_afk_contract_present "$STATE"; }
 
-# captain_held_silenced <status-line>: 0 when the line declares a captain-held
-# transfer and the away-posture record exists, so every stale path absorbs the
-# pane silently instead of rechecking it.
-captain_held_silenced() {  # <status-line>
-  status_is_captain_held "$1" && afk_record_present
+# wait_on_captain_silenced <status-line>: 0 when the line declares a wait on the
+# captain (fm-classify-lib.sh's status_wait_on_captain owns which declarations
+# qualify) and the away-posture record exists, so every stale path absorbs the
+# pane silently instead of surfacing it at all.
+wait_on_captain_silenced() {  # <status-line>
+  status_wait_on_captain "$1" && afk_record_present
+}
+
+# The silent absorb above still records the sighting. The return brief lists a
+# wait on the captain declared under the record, and that listing is the one
+# sighting the declaration is owed, so the first idle poll after the record is
+# archived must not surface it again; the throttle is keyed to the declaration
+# scope, so a wait re-declared after return still gets its own single sighting.
+wait_on_captain_absorb_record() {  # <window-key> <task>
+  printf '%s' "$(stale_wait_declaration "$2")" > "$STATE/.paused-resurfaced-$1"
 }
 
 hash_pane() {
@@ -886,13 +908,21 @@ FM_WEDGE_DEMAND_INSPECT_COUNT=${FM_WEDGE_DEMAND_INSPECT_COUNT:-3}
 # window; wake() itself exits the cycle, exactly as it does inline. An optional
 # <min-age> replaces the cadence as the absorb-age gate for one call (0 lets a
 # declared `until` time that has just passed re-surface at once), while the
-# throttle keeps the cadence between repeats.
-resurface_absorbed() {  # <window> <throttle-marker> <age> <reason> [scope] [min-age]
+# throttle keeps the cadence between repeats. An optional <cadence> replaces that
+# between-repeats window, and the value `never` removes it: the scope then wakes
+# on its first sighting and never again, which is what a wait only the captain
+# can end gets (see PAUSE_RESURFACE_SECS above).
+resurface_absorbed() {  # <window> <throttle-marker> <age> <reason> [scope] [min-age] [cadence]
   local win=$1 throttle=$2 age=$3 reason=$4 scope=${5-} min_age=${6:-$PAUSE_RESURFACE_SECS}
+  local cadence=${7:-$PAUSE_RESURFACE_SECS}
   if [ -z "$scope" ] || [ ! -e "$throttle" ] \
     || [ "$(cat "$throttle" 2>/dev/null || true)" = "$scope" ]; then
     [ "$age" -ge "$min_age" ] || return 0
-    [ "$(age_of "$throttle")" -ge "$PAUSE_RESURFACE_SECS" ] || return 0   # 999999 when no prior re-surface
+    if [ "$cadence" = never ]; then
+      [ ! -e "$throttle" ] || return 0
+    else
+      [ "$(age_of "$throttle")" -ge "$cadence" ] || return 0   # 999999 when no prior re-surface
+    fi
   fi
   fm_wake_append stale "$win" "$reason" || exit 1
   if [ -n "$scope" ]; then printf '%s' "$scope" > "$throttle"; else date +%s > "$throttle"; fi
@@ -1028,9 +1058,14 @@ wedge_wait_evidence() {  # <task> -> one wait_record on stdout
   [ -n "$task" ] || return 1
   statusf="$STATE/$task.status"
   last=$(last_status_line "$statusf")
-  if status_is_captain_held "$last"; then
-    wait_record 'captain-held' 'awaiting the captain - verified hold transfer' \
-      captain 'answer the held decision or release the hold' "$statusf"
+  if status_wait_on_captain "$last"; then
+    if status_is_captain_held "$last"; then
+      wait_record 'captain-held' 'awaiting the captain - verified hold transfer' \
+        captain 'answer the held decision or release the hold' "$statusf"
+    else
+      wait_record 'declared wait on the captain' 'awaiting the captain' \
+        captain 'answer the wait or release it' "$statusf"
+    fi
     return 0
   fi
   if status_is_paused "$last"; then
@@ -1071,20 +1106,21 @@ wedge_wait_evidence() {  # <task> -> one wait_record on stdout
 # pass, so a number read from it would never grow and would tell a supervisor
 # that a day-old gate opened four minutes ago. The bounded re-surface still
 # fires, governed by its own throttle instead of by a wait age.
-# A CAPTAIN-facing wait is not rechecked at all while the away-posture record
-# exists: the one human who can answer it is away, the return brief already lists
-# it, and every other captain-facing path in this file absorbs it silently for
-# that reason (handle_paused_stale, surface_nonterminal_stale,
-# captain_call_stale_bound). That absorb arms no throttle and deliberately
+# A CAPTAIN-facing wait is not rechecked at all, in either posture: the one human
+# who can end it has the work in hand already, so a recheck can only report that
+# a wait they have not ended has not ended. Every other captain-facing path in
+# this file stops rechecking one for that reason (handle_paused_stale,
+# surface_nonterminal_stale). That absorb arms no throttle and deliberately
 # leaves the idle timer alone: a `captain` whom is minted only by the
-# captain-held arm of wedge_wait_evidence, which returns before the
+# wait-on-captain arm of wedge_wait_evidence, which returns before the
 # wedge-defer-parked-gate flag test and therefore before any decision-fold or
-# current-state read, so the only read that repeats under the away record is the
-# one status-line read that predates this deferral. There is nothing costly to
-# throttle there, so the recheck owed on return stays owed in full the moment the
-# record is archived rather than starting a cadence nobody could act on. The
-# costly parked-gate consult is owed to the supervisor instead, never silenced
-# here, and its own deferral restarts the timer below.
+# current-state read, so the only read that repeats is the one status-line read
+# that predates this deferral. There is nothing costly to throttle there. This
+# pane is also PROVABLY WORKING - that is the only way a window reaches the wedge
+# timer at all - so there is no stopped pane hiding behind the silence; the
+# stopped case belongs to handle_paused_stale, which still surfaces it once.
+# The costly parked-gate consult is owed to the supervisor instead, never
+# silenced here, and its own deferral restarts the timer below.
 # The escalation counter is left alone, exactly as the write deferral leaves it:
 # this is not an escalation, and a later genuine one must keep the
 # demand-inspection history it had already earned.
@@ -1118,8 +1154,8 @@ EOF
     return 1
   fi
   key=$(window_key "$win")
-  if [ "$whom" = captain ] && afk_record_present; then
-    triage_log "absorbed $label ($kind, never rechecked while the away-posture record exists): $win"
+  if [ "$whom" = captain ]; then
+    triage_log "absorbed $label ($kind, never rechecked - only the captain can end it): $win"
     return 0
   fi
   mtime=''
@@ -1310,11 +1346,20 @@ busy_turn_over_age() {  # <task>
 #
 # The recheck names WHICH human the declared wait is on, because that is the whole
 # point of a recheck the captain reads: an external dependency for paused:, and the
-# captain themself for a verified hold. Only the captain-held verb takes the second
-# wording; a caller that reached the bounded cadence off pause tracking alone, with
-# no declaring verb left on the log, keeps the external-wait wording it always had.
+# captain themself for a wait the worker declared on them. Only a wait on the
+# captain takes the second wording; a caller that reached the bounded cadence off
+# pause tracking alone, with no declaring verb left on the log, keeps the
+# external-wait wording it always had.
+#
+# A wait on the captain gets no cadence at all: it wakes on a declaration this
+# window has not alarmed yet - which is how a pane already stopped when its wait
+# was declared still surfaces, since the live first-sight path never saw it - and
+# on nothing after that. It shares the one .paused-resurfaced-<key> throttle and
+# the one declaration scope with surface_nonterminal_stale deliberately, because
+# a pane moves between the two paths as its agent's liveness is read and a scope
+# of its own here would hand the same wait a second wake for the same reason.
 handle_paused_stale() {  # <window> <task> <hash>
-  local win=$1 task=$2 h=$3 key statusf mtime age detail reason declaration last until now min_age
+  local win=$1 task=$2 h=$3 key statusf mtime age detail reason declaration last until now min_age cadence
   key=$(window_key "$win")
   printf '%s' "$h" > "$STATE/.stale-$key"
   : > "$STATE/.paused-$key"
@@ -1327,14 +1372,23 @@ handle_paused_stale() {  # <window> <task> <hash>
   age=$(( now - mtime ))
   last=$(last_status_line "$statusf")
   min_age=$PAUSE_RESURFACE_SECS
-  declaration="declared:$(fm_wake_signal_sig "$statusf" || true)"
-  if status_is_captain_held "$last"; then
+  cadence=$PAUSE_RESURFACE_SECS
+  declaration=$(status_wait_declaration_scope "$statusf")
+  if status_wait_on_captain "$last"; then
     if afk_record_present; then
-      triage_log "absorbed stale (captain-held, never rechecked while the away-posture record exists): $win"
+      wait_on_captain_absorb_record "$key" "$task"
+      triage_log "absorbed stale (wait on the captain, not surfaced while the away-posture record exists): $win"
       return 0
     fi
-    detail="captain-held, awaiting the captain"
-    reason="captain-held ${age}s, awaiting the captain - verified hold transfer, rechecked on a long cadence not a wedge; answer the held decision or release the hold"
+    cadence=never
+    min_age=0
+    if status_is_captain_held "$last"; then
+      detail="captain-held, awaiting the captain"
+      reason="captain-held ${age}s, awaiting the captain - verified hold transfer, surfaced once and not rechecked; answer the held decision or release the hold"
+    else
+      detail="paused on the captain"
+      reason="paused ${age}s, awaiting the captain - the wait names the captain, surfaced once and not rechecked; answer the wait or release it"
+    fi
   elif until=$(status_paused_until "$last"); then
     if [ "$now" -lt "$until" ] && [ "$age" -lt "$PAUSE_RESURFACE_SECS" ]; then
       triage_log "absorbed stale (paused until $(( until - now ))s from now, declared time not reached): $win"
@@ -1354,7 +1408,7 @@ handle_paused_stale() {  # <window> <task> <hash>
     detail="paused, awaiting external"
     reason="paused ${age}s, awaiting external - declared pause, rechecked on a long cadence not a wedge; confirm the wait still holds"
   fi
-  resurface_absorbed "$win" "$STATE/.paused-resurfaced-$key" "$age" "stale: $win ($reason)" "$declaration" "$min_age"
+  resurface_absorbed "$win" "$STATE/.paused-resurfaced-$key" "$age" "stale: $win ($reason)" "$declaration" "$min_age" "$cadence"
   triage_log "absorbed stale ($detail, age ${age}s): $win"
 }
 
@@ -1408,9 +1462,10 @@ busy_turn_bound_check() {  # <window> <task> <hash> <since-file> <escalation-fil
       rm -f "$since_file" "$escalation_file"
       clear_write_tracking "$key"
       declared="declared:$(fm_wake_signal_sig "$statusf" || true)"
-      if captain_held_silenced "$(last_status_line "$statusf")"; then
+      if wait_on_captain_silenced "$(last_status_line "$statusf")"; then
         printf '%s' "$declared" > "$STATE/.stale-$key"
-        triage_log "absorbed busy over-age pane (captain-held, never rechecked while the away-posture record exists): $win"
+        wait_on_captain_absorb_record "$key" "$task"
+        triage_log "absorbed busy over-age pane (wait on the captain, not surfaced while the away-posture record exists): $win"
         return 0
       fi
       if [ "$(cat "$STATE/.stale-$key" 2>/dev/null || true)" != "$declared" ]; then
@@ -1550,7 +1605,7 @@ task_captain_call_open() {  # <task>
 # blocker - changes it and so starts its own window instead of inheriting the
 # silence of the one before it.
 stale_wait_declaration() {  # <task>
-  printf 'declared:%s' "$(fm_wake_signal_sig "$STATE/$1.status" || true)"
+  status_wait_declaration_scope "$STATE/$1.status"
 }
 
 # The same scope for a captain call, carrying the CALL's own lifecycle identity
@@ -1568,10 +1623,16 @@ captain_call_declaration() {  # <task> <call-identity>
 # 0 when <declaration> has already been alarmed for this window inside the
 # current PAUSE_RESURFACE_SECS. A pure read: recording an alarm is the caller's,
 # so the throttle is never advanced by a sighting it just absorbed.
-stale_wait_throttled() {  # <window-key> <declaration>
-  local throttle="$STATE/.paused-resurfaced-$1"
-  [ "$(cat "$throttle" 2>/dev/null || true)" = "$2" ] \
-    && [ "$(age_of "$throttle")" -lt "$PAUSE_RESURFACE_SECS" ]
+# An optional <cadence> replaces that window, and `never` removes it: the
+# declaration then stays throttled for as long as it stands, so a wait only the
+# captain can end alarms on its first sighting and on no later one. A DIFFERENT
+# declaration is never throttled under either value, which is what keeps a fresh
+# declaration's first sight reaching the captain.
+stale_wait_throttled() {  # <window-key> <declaration> [cadence]
+  local throttle="$STATE/.paused-resurfaced-$1" cadence=${3:-$PAUSE_RESURFACE_SECS}
+  [ "$(cat "$throttle" 2>/dev/null || true)" = "$2" ] || return 1
+  [ "$cadence" != never ] || return 0
+  [ "$(age_of "$throttle")" -lt "$cadence" ]
 }
 
 # The same bound, for a stale window whose last line IS captain-relevant. That
@@ -1632,7 +1693,20 @@ surface_nonterminal_stale() {  # <window> <hash>
   task=$(window_to_task "$win" "$STATE")
   last=$(last_status_line "$STATE/$task.status")
   STALE_WAIT_DECLARATION=
-  if status_is_paused "$last"; then
+  if status_wait_on_captain "$last"; then
+    # A wait the captain alone can end. Its first sight still reaches them -
+    # nothing bounds a declaration this window has not alarmed yet - and no
+    # sighting after it does, however long the wait stands.
+    declared=0
+    bounded=0
+    STALE_WAIT_DECLARATION=$(stale_wait_declaration "$task")
+    if wait_on_captain_silenced "$last"; then
+      throttled=0
+      stale_wait_record "$key"
+    else
+      stale_wait_throttled "$key" "$STALE_WAIT_DECLARATION" never && throttled=0
+    fi
+  elif status_is_paused "$last"; then
     declared=0
     bounded=0
     STALE_WAIT_DECLARATION=$(stale_wait_declaration "$task")
@@ -1644,15 +1718,6 @@ surface_nonterminal_stale() {  # <window> <hash>
         STALE_WAIT_DECLARATION="$STALE_WAIT_DECLARATION:due"
         stale_wait_throttled "$key" "$STALE_WAIT_DECLARATION" && throttled=0
       fi
-    else
-      stale_wait_throttled "$key" "$STALE_WAIT_DECLARATION" && throttled=0
-    fi
-  elif status_is_captain_held "$last"; then
-    declared=0
-    bounded=0
-    STALE_WAIT_DECLARATION=$(stale_wait_declaration "$task")
-    if captain_held_silenced "$last"; then
-      throttled=0
     else
       stale_wait_throttled "$key" "$STALE_WAIT_DECLARATION" && throttled=0
     fi
@@ -2655,18 +2720,25 @@ EOF
       if [ "$n" -ge 2 ] && [ "$busy_now" -ne 0 ]; then
         # The pane is idle/stale at hash $h. Triage decides whether this wakes
         # firstmate. Detection itself is unchanged from above.
-        if [ "$kind" = secondmate ]; then
+        if [ "$kind" = secondmate ] && ! { afk_present && status_wait_on_captain "$last"; }; then
           case "$(pause_state_class "$w" "$task")" in
             paused) handle_paused_stale "$w" "$task" "$h" ;;
             *)      clear_pause_tracking "$key" ;;
           esac
         elif afk_present; then
           # Daemon owns triage: one-shot per distinct stale hash, as before,
-          # except that a captain-held pane is never handed over while the
-          # away-posture record exists (captain_held_silenced).
-          if captain_held_silenced "$last"; then
+          # except that a pane waiting on the captain is never handed over while
+          # the away-posture record exists (wait_on_captain_silenced). In quiet
+          # mode there is no such record, so the pane is handed over and the
+          # daemon applies the same never-rechecked rule this file does. A
+          # secondmate's wait on the captain joins this hand-off rather than the
+          # declared-wait absorb above: that absorb records the throttle as it
+          # queues, and a wake queued to the daemon is not yet a delivered
+          # sighting, so the daemon must read the throttle unarmed to deliver it.
+          if wait_on_captain_silenced "$last"; then
             printf '%s' "$h" > "$sf"
-            triage_log "absorbed stale (captain-held, never rechecked while the away-posture record exists): $w"
+            wait_on_captain_absorb_record "$key" "$task"
+            triage_log "absorbed stale (wait on the captain, not surfaced while the away-posture record exists): $w"
           elif [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ]; then
             fm_wake_append stale "$w" "stale: $w" || exit 1
             printf '%s' "$h" > "$sf"
