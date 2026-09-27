@@ -5890,9 +5890,10 @@ test_afk_paused_changed_pane_hands_off_plain_stale() {
 # While state/.afk-contract exists (bin/fm-afk-contract.sh) nobody is there to
 # answer a captain-held item and the return brief lists it, so every stale path
 # absorbs such a pane silently: the declared-wait cadence, the live-agent first
-# sight, the backlog-hold bound, and the daemon-owned one-shot handoff. Archiving
-# the record restores the ordinary bounded recheck, so the rule is the record's,
-# not a lost alarm.
+# sight, the backlog-hold bound, and the daemon-owned one-shot handoff. The
+# listing is the declaration's one sighting, so each absorb records it against
+# the throttle and archiving the record (the return) surfaces nothing more; a
+# wait re-declared after the return still gets its own single sighting.
 
 # A UTC ISO 8601 stamp for an epoch, on either date flavor.
 iso_utc_at() {  # <epoch>
@@ -5940,22 +5941,40 @@ test_captain_held_never_rechecked_while_away_record_exists() {
   fi
   [ ! -s "$out" ] || fail "a captain-held recheck was printed while the away-posture record exists"
   [ ! -s "$state/.wake-queue" ] || fail "a captain-held recheck was queued while the away-posture record exists"
-  [ ! -e "$state/.paused-resurfaced-$key" ] || fail "the recheck throttle was armed for an item that must never be rechecked"
+  [ "$(cat "$state/.paused-resurfaced-$key" 2>/dev/null || true)" = "$(status_wait_declaration_scope "$statusf")" ] \
+    || fail "the silent absorb did not record the declaration against the throttle, so the return would surface it a second time"
   grep -F 'not surfaced while the away-posture record exists' "$state/.watch-triage.log" >/dev/null \
     || fail "the silent absorb did not name the away-posture rule in the triage log"
   reap "$pid"
   ack_stopped_cycle "$state" || fail "could not acknowledge the intentional phase-A stop"
-  # Phase B: archiving the record (the return) restores the bounded recheck.
+  # Phase B: archiving the record (the return) surfaces nothing more for the
+  # same declaration: the return brief was its one sighting.
   archive_away_record "$state"
   : > "$out"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
   pid=$!
-  wait_for_exit "$pid" 100 || { reap "$pid"; fail "archiving the away-posture record did not restore the captain-held recheck"; }
-  grep -F "awaiting the captain" "$out" >/dev/null || fail "the restored recheck did not name the captain: $(cat "$out")"
+  if ! wait_poll_cycle "$state" "$pid" || ! wait_poll_cycle "$state" "$pid"; then
+    reap "$pid"; fail "archiving the away-posture record surfaced a wait the return brief already listed: $(cat "$out")"
+  fi
+  [ ! -s "$out" ] || fail "a wait the return brief already listed was surfaced again after the record was archived: $(cat "$out")"
+  [ ! -s "$state/.wake-queue" ] || fail "a wait the return brief already listed was queued again after the record was archived"
+  reap "$pid"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the intentional phase-B stop"
+  # Phase C: a wait re-declared after the return is a new declaration and gets
+  # its own single sighting.
+  printf 'captain-held [key=route2]: tracked by task-decision-route\n' >> "$statusf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-secondmate-hold_status"
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 100 || { reap "$pid"; fail "a wait re-declared after the return was not surfaced once: $(cat "$out")"; }
+  grep -F "awaiting the captain" "$out" >/dev/null || fail "the re-declaration's sighting did not name the captain: $(cat "$out")"
   unset FM_FAKE_CREW_STATE
-  pass "a wait on the captain is not surfaced at all while the away-posture record exists, and the sighting returns once the record is archived"
+  pass "a wait on the captain is not surfaced at all while the away-posture record exists, the return brief is its one sighting, and only a re-declaration is surfaced after the record is archived"
 }
 
 test_live_captain_held_first_sight_silenced_by_away_record() {
@@ -5982,6 +6001,8 @@ test_live_captain_held_first_sight_silenced_by_away_record() {
   fi
   [ ! -s "$state/.wake-queue" ] || fail "a live captain-held pane was queued while the away-posture record exists"
   [ -e "$state/.stale-$key" ] || fail "the silenced first sight did not advance the stale suppressor"
+  [ "$(cat "$state/.paused-resurfaced-$key" 2>/dev/null || true)" = "$(status_wait_declaration_scope "$statusf")" ] \
+    || fail "the silenced first sight did not record the declaration against the throttle"
   reap "$pid"
   unset FM_FAKE_CREW_STATE
   pass "a live captain-held pane is absorbed on first sight while the away-posture record exists"
@@ -6028,6 +6049,8 @@ test_afk_one_shot_never_hands_off_captain_held_under_away_record() {
   [ ! -s "$state/.wake-queue" ] || fail "the daemon-owned one-shot queued a captain-held pane while the away-posture record exists"
   [ "$(cat "$state/.stale-$key" 2>/dev/null || true)" = "$(hash_text 'idle awaiting the captain')" ] \
     || fail "the silenced one-shot did not advance the stale suppressor to the pane hash"
+  [ "$(cat "$state/.paused-resurfaced-$key" 2>/dev/null || true)" = "$(status_wait_declaration_scope "$statusf")" ] \
+    || fail "the silenced one-shot did not record the declaration against the throttle"
   reap "$pid"
   pass "the daemon-owned one-shot never hands off a captain-held pane while the away-posture record exists"
 }

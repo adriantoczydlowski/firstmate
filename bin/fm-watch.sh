@@ -349,6 +349,15 @@ wait_on_captain_silenced() {  # <status-line>
   status_wait_on_captain "$1" && afk_record_present
 }
 
+# The silent absorb above still records the sighting. The return brief lists a
+# wait on the captain declared under the record, and that listing is the one
+# sighting the declaration is owed, so the first idle poll after the record is
+# archived must not surface it again; the throttle is keyed to the declaration
+# scope, so a wait re-declared after return still gets its own single sighting.
+wait_on_captain_absorb_record() {  # <window-key> <task>
+  printf '%s' "$(stale_wait_declaration "$2")" > "$STATE/.paused-resurfaced-$1"
+}
+
 hash_pane() {
   if command -v md5 >/dev/null 2>&1; then md5 -q; else md5sum | cut -d' ' -f1; fi
 }
@@ -1367,6 +1376,7 @@ handle_paused_stale() {  # <window> <task> <hash>
   declaration=$(status_wait_declaration_scope "$statusf")
   if status_wait_on_captain "$last"; then
     if afk_record_present; then
+      wait_on_captain_absorb_record "$key" "$task"
       triage_log "absorbed stale (wait on the captain, not surfaced while the away-posture record exists): $win"
       return 0
     fi
@@ -1454,6 +1464,7 @@ busy_turn_bound_check() {  # <window> <task> <hash> <since-file> <escalation-fil
       declared="declared:$(fm_wake_signal_sig "$statusf" || true)"
       if wait_on_captain_silenced "$(last_status_line "$statusf")"; then
         printf '%s' "$declared" > "$STATE/.stale-$key"
+        wait_on_captain_absorb_record "$key" "$task"
         triage_log "absorbed busy over-age pane (wait on the captain, not surfaced while the away-posture record exists): $win"
         return 0
       fi
@@ -1691,6 +1702,7 @@ surface_nonterminal_stale() {  # <window> <hash>
     STALE_WAIT_DECLARATION=$(stale_wait_declaration "$task")
     if wait_on_captain_silenced "$last"; then
       throttled=0
+      stale_wait_record "$key"
     else
       stale_wait_throttled "$key" "$STALE_WAIT_DECLARATION" never && throttled=0
     fi
@@ -2721,6 +2733,7 @@ EOF
           # daemon applies the same never-rechecked rule this file does.
           if wait_on_captain_silenced "$last"; then
             printf '%s' "$h" > "$sf"
+            wait_on_captain_absorb_record "$key" "$task"
             triage_log "absorbed stale (wait on the captain, not surfaced while the away-posture record exists): $w"
           elif [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ]; then
             fm_wake_append stale "$w" "stale: $w" || exit 1

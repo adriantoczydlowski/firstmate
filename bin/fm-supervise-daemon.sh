@@ -530,19 +530,25 @@ pause_marker_remove() {  # <window> <state>
 # nothing recorded against it. The throttle is the watcher's own
 # .paused-resurfaced-<key>, keyed to the shared declaration scope, so a wait the
 # always-on watcher already surfaced is not repeated on /quiet on and one
-# surfaced here is not repeated on /quiet off.
+# surfaced here is not repeated on /quiet off. Under the away posture the
+# declaration is recorded against that throttle without an escalation: the
+# return brief is its sighting, and the first idle poll after the record is
+# archived must not surface it again.
 wait_on_captain_first_sight() {  # <window> <state> <last-status-line>
   local win=$1 state=$2 last=$3 task key throttle scope recorded
   [ -n "$last" ] || return 0
   status_wait_on_captain "$last" || return 0
   status_is_captain_held "$last" && return 0
-  fm_afk_contract_present "$state" && return 0
   task=$(window_to_task "$win" "$state")
   key=$(_stale_key "$task")
   throttle="$state/.paused-resurfaced-$(_stale_key "$win")"
   scope=$(status_wait_declaration_scope "$state/$task.status")
   recorded=$(cat "$throttle" 2>/dev/null || true)
   [ "$recorded" != "$scope" ] || return 0
+  if fm_afk_contract_present "$state"; then
+    printf '%s' "$scope" > "$throttle"
+    return 0
+  fi
   if [ -e "$state/.subsuper-paused-$key" ] && [ -z "$recorded" ]; then return 0; fi
   if escalate_add "$state" "paused (awaiting the captain, the wait names the captain, surfaced once and not rechecked; answer the wait or release it): $win"; then
     printf '%s' "$scope" > "$throttle"

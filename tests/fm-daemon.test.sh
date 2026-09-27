@@ -1014,7 +1014,8 @@ test_housekeeping_wait_on_captain_is_never_rechecked() {
 # handler: the signal that declares it escalates exactly once, the stale wake
 # that follows and an overdue housekeeping tick add nothing, a re-declaration
 # earns its own single sighting, the away posture stays silent (the return brief
-# lists it), a declaration the always-on watcher already surfaced is not
+# lists it) and records the declaration so the return surfaces nothing more, a
+# declaration the always-on watcher already surfaced is not
 # repeated, and a captain-held transfer - firstmate's own append - is not
 # surfaced here at all.
 test_wait_on_captain_first_sight_escalates_once_under_quiet_mode() {
@@ -1065,12 +1066,19 @@ test_wait_on_captain_first_sight_escalates_once_under_quiet_mode() {
   FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 handle_wake "stale: $win" "$state"
   n=$(escalations)
   [ "$n" = 2 ] || fail "a wait declared under the away posture was surfaced instead of left to the return brief ($n escalations)"
+  [ "$(cat "$state/.paused-resurfaced-$watcher_key" 2>/dev/null || true)" = "$(status_wait_declaration_scope "$statusf")" ] \
+    || fail "the away-posture absorb did not record the declaration against the watcher's throttle, so the return would surface it a second time"
   rm -f "$state/.afk-contract"
-
-  printf '%s' "$(status_wait_declaration_scope "$statusf")" > "$state/.paused-resurfaced-$watcher_key"
   FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 handle_wake "stale: $win" "$state"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
     FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
+  n=$(escalations)
+  [ "$n" = 2 ] || fail "a wait the return brief already listed was surfaced again once the record was gone ($n escalations)"
+
+  printf 'paused [on=captain]: awaiting the captain on the rollout\n' >> "$statusf"
+  printf '%s' "$(status_wait_declaration_scope "$statusf")" > "$state/.paused-resurfaced-$watcher_key"
+  FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 handle_wake "signal: $statusf" "$state"
+  FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 handle_wake "stale: $win" "$state"
   n=$(escalations)
   [ "$n" = 2 ] || fail "a declaration the always-on watcher already surfaced was repeated ($n escalations)"
 
