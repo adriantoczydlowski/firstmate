@@ -56,9 +56,13 @@
 #     fm-classify-lib.sh's combined predicate - instead gets its own longer
 #     PAUSE_RESURFACE_SECS recheck, never a wedge escalation, whether its pane
 #     reads idle or busy; only a status append that stops declaring the wait
-#     ends that routing. A captain-held transfer is not rechecked at all while
-#     the away-posture record (state/.afk-contract) exists: nobody is there to
-#     answer it, and the return brief lists it.
+#     ends that routing. A wait on the captain - a captain-held transfer, or a
+#     paused: line carrying the wait-owner marker - is not rechecked at all, in
+#     either posture: only the captain can end it, so a recheck can report
+#     nothing but that they have not ended it yet. A marker wait is escalated
+#     once on its first sight under quiet mode, where no away-posture record
+#     exists and its routine paused signal would otherwise never reach the
+#     captain; under the away posture the return brief lists it instead.
 #     Crewmates are autonomous, so a delayed stale response does not stall a
 #     healthy crewmate's own progress.
 #     Buffered escalation delivery also has a max-defer alarm: if a digest stays
@@ -106,8 +110,7 @@
 #                                   idle or busy, before it re-surfaces as a
 #                                   recheck (default 14400, four hours); an
 #                                   `until` time cannot extend this bound, and a
-#                                   captain-held transfer is never rechecked
-#                                   while the away-posture record exists
+#                                   wait on the captain is never rechecked at all
 #          FM_ESCALATE_BATCH_SECS   buffer window for batched escalation
 #                                   digests; 0 = flush immediately (default 90)
 #          FM_HEARTBEAT_SCAN_SECS   cadence for the catch-all status scan
@@ -557,7 +560,52 @@ pause_marker_record() {  # <window> <state> - create if absent
 pause_marker_remove() {  # <window> <state>
   local win=$1 state=$2 key
   key=$(_stale_key "$(window_to_task "$win" "$state")")
-  rm -f "$state/.subsuper-paused-$key" "$state/.subsuper-pause-until-due-$key"
+  rm -f "$state/.subsuper-paused-$key" "$state/.subsuper-pause-until-due-$key" "$state/.subsuper-paused-owner-$key"
+}
+
+# The daemon's one sighting of a wait a WORKER declared on the captain (a paused:
+# line carrying the wait-owner marker; status_wait_on_captain owns the shape).
+# That declaration reaches the daemon as a routine paused signal it self-handles
+# and housekeeping (2b) never rechecks it, so without this the captain would hear
+# of it only after /quiet off. Escalated once per declaration under quiet mode,
+# where no away-posture record exists; under the away posture it is not surfaced
+# at all and the return brief lists it. A verified captain-held transfer is
+# excluded: firstmate wrote that line itself when it handed the work over, so
+# the hold was its sighting. Called before the pause marker is recorded: the
+# sighting is owed when the wait is first recorded (no marker yet) or when a
+# recorded declaration has been replaced, never while the marker stands with
+# nothing recorded against it. reconcile_pause_tracking keeps that marker
+# specific: one that stood for an external wait is dropped when the declaration
+# moves onto the captain, and the marker for a captain wait is recorded only
+# once the sighting was delivered (a failed delivery returns 1 and is retried at
+# the next sight). The throttle is the watcher's own
+# .paused-resurfaced-<key>, keyed to the shared declaration scope, so a wait the
+# always-on watcher already surfaced is not repeated on /quiet on and one
+# surfaced here is not repeated on /quiet off. Under the away posture the
+# declaration is recorded against that throttle without an escalation: the
+# return brief is its sighting, and the first idle poll after the record is
+# archived must not surface it again.
+wait_on_captain_first_sight() {  # <window> <state> <last-status-line>
+  local win=$1 state=$2 last=$3 task key throttle scope recorded
+  [ -n "$last" ] || return 0
+  status_wait_on_captain "$last" || return 0
+  status_is_captain_held "$last" && return 0
+  task=$(window_to_task "$win" "$state")
+  key=$(_stale_key "$task")
+  throttle="$state/.paused-resurfaced-$(_stale_key "$win")"
+  scope=$(status_wait_declaration_scope "$state/$task.status")
+  recorded=$(cat "$throttle" 2>/dev/null || true)
+  [ "$recorded" != "$scope" ] || return 0
+  if fm_afk_contract_present "$state"; then
+    printf '%s' "$scope" > "$throttle"
+    return 0
+  fi
+  if [ -e "$state/.subsuper-paused-$key" ] && [ -z "$recorded" ]; then return 0; fi
+  if escalate_add "$state" "paused (awaiting the captain, the wait names the captain, surfaced once and not rechecked; answer the wait or release it): $win"; then
+    printf '%s' "$scope" > "$throttle"
+    return 0
+  fi
+  return 1
 }
 
 clear_pause_tracking() {  # <window> <state>
@@ -565,22 +613,31 @@ clear_pause_tracking() {  # <window> <state>
   task=$(window_to_task "$win" "$state")
   key=$(_stale_key "$task")
   watcher_key=$(_stale_key "$win")
-  rm -f "$state/.subsuper-paused-$key" "$state/.subsuper-pause-until-due-$key" "$state/.subsuper-stale-$key" \
-    "$state/.paused-$watcher_key" "$state/.paused-rechecked-$watcher_key" "$state/.paused-resurfaced-$watcher_key" \
+  rm -f "$state/.subsuper-paused-$key" "$state/.subsuper-pause-until-due-$key" "$state/.subsuper-paused-owner-$key" \
+    "$state/.subsuper-stale-$key" "$state/.paused-$watcher_key" "$state/.paused-rechecked-$watcher_key" "$state/.paused-resurfaced-$watcher_key" \
     "$state/.stale-$watcher_key" "$state/.stale-since-$watcher_key" "$state/.wedge-escalations-$watcher_key" \
     "$state/.writing-since-$watcher_key" "$state/.writing-resurfaced-$watcher_key" \
     "$state/.waiting-resurfaced-$watcher_key"
 }
 
 reconcile_pause_tracking() {  # <window> <state> <last-status-line>
-  local win=$1 state=$2 last=$3 task key marker watcher_key
+  local win=$1 state=$2 last=$3 task key marker owner_file owner watcher_key
   task=$(window_to_task "$win" "$state")
   key=$(_stale_key "$task")
   marker="$state/.subsuper-paused-$key"
+  owner_file="$state/.subsuper-paused-owner-$key"
   watcher_key=$(_stale_key "$win")
   if status_is_paused_or_captain_held "$last"; then
     stale_marker_remove "$win" "$state"
-    pause_marker_record "$win" "$state"
+    owner=external
+    if status_wait_on_captain "$last" && ! status_is_captain_held "$last"; then owner=captain; fi
+    if [ "$owner" = captain ] && [ -e "$marker" ] && [ "$(cat "$owner_file" 2>/dev/null || true)" = external ]; then
+      rm -f "$marker" "$state/.subsuper-pause-until-due-$key"
+    fi
+    if wait_on_captain_first_sight "$win" "$state" "$last"; then
+      pause_marker_record "$win" "$state"
+      printf '%s' "$owner" > "$owner_file"
+    fi
   elif [ -e "$marker" ] || [ -e "$state/.paused-$watcher_key" ]; then
     clear_pause_tracking "$win" "$state"
   fi
@@ -1253,12 +1310,17 @@ housekeeping() {  # <state>
   # (2b) pause re-surface recheck. A declared wait is waiting, not wedged (fm-classify-lib.sh's
   # status_is_paused_or_captain_held owns which declarations qualify), so it is
   # rechecked on a much longer cadence than a wedge (PAUSE_RESURFACE_SECS) and never
-  # escalated as one - but it MUST re-surface, so neither a forgotten pause nor a
-  # forgotten captain hold can rot invisibly. Past the window: gone -> drop; still
-  # declaring the wait -> escalate a recheck digest and reset the marker so the window
-  # repeats. The digest names WHICH human the wait is on, because the captain is the
-  # one reading it: an external dependency for a paused: declaration, and the captain
-  # themself for a verified hold transfer.
+  # escalated as one - but it MUST re-surface, so a forgotten pause cannot rot
+  # invisibly. Past the window: gone -> drop; still declaring the wait -> escalate a
+  # recheck digest and reset the marker so the window repeats. The digest names the
+  # external dependency the wait is on, because the captain is the one reading it.
+  # A wait on the captain (status_wait_on_captain) has no recheck here at all, in
+  # either posture: only the captain can end it, so a recheck can report nothing
+  # but that they have not ended it yet. Its one sighting is owed elsewhere:
+  # wait_on_captain_first_sight escalates a marker wait once when it is declared
+  # under quiet mode, and the return brief lists it under the away posture. This
+  # is the same rule the always-on watcher applies (bin/fm-watch.sh), so the two
+  # supervisors cannot disagree about which waits get a cadence.
   # Pane busy state does NOT end the wait. A declared wait can legitimately hold a
   # pane busy - a worker parked on a long foreground call it keeps live for as long
   # as the wait lasts - so reading busy as "the crew resumed" retires the window of
@@ -1285,7 +1347,7 @@ housekeeping() {  # <state>
     due="$state/.subsuper-pause-until-due-$key"
     until=
     bounded_until=0
-    if status_is_captain_held "$last" && fm_afk_contract_present "$state"; then
+    if status_wait_on_captain "$last"; then
       continue
     fi
     if until=$(status_paused_until "$last"); then
@@ -1310,10 +1372,11 @@ housekeeping() {  # <state>
       2) rm -f "$marker" ;;
       *)
         last=$(status_declared_wait_line "$state/$task.status")
-        if [ -n "$last" ] && status_is_captain_held "$last"; then
-          if escalate_add "$state" "captain-held ${age}s (awaiting the captain, answer the held decision or release the hold): $win"; then
-            _now > "$marker"
-          fi
+        # Re-read after the endpoint probe: the crew may have replaced its
+        # declaration in between, and a wait that now names the captain is owed
+        # no recheck however long its marker has aged.
+        if [ -n "$last" ] && status_wait_on_captain "$last"; then
+          continue
         elif [ -n "$last" ] && status_is_paused "$last"; then
           if [ "$bounded_until" -eq 1 ]; then
             pause_reason="paused ${age}s (awaiting external, the declared time is beyond the recheck cadence; confirm the wait still holds): $win"
@@ -1636,8 +1699,8 @@ handle_wake() {  # <reason> <state>
       # wedge stale marker, so a pane that transitioned working->declared-wait is not
       # still wedge-aged. Only stale produces this action.
       if [ "$kind" = "stale" ]; then
-        stale_marker_remove "$arg" "$state"
-        pause_marker_record "$arg" "$state"
+        task=$(window_to_task "$arg" "$state")
+        reconcile_pause_tracking "$arg" "$state" "$(last_status_line "$state/$task.status")"
       fi
       log "self-handle (paused): $reason -> $distilled"
       ;;

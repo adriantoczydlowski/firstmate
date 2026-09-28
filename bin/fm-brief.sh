@@ -143,6 +143,12 @@ esac
 # shellcheck source=bin/fm-dod-lib.sh
 . "$SCRIPT_DIR/fm-dod-lib.sh"
 PAUSED_VERB=${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}
+WAIT_ON_CAPTAIN_TAG=${FM_CLASSIFY_WAIT_ON_CAPTAIN_TAG:-$FM_CLASSIFY_WAIT_ON_CAPTAIN_TAG_DEFAULT}
+# The one worker-facing spelling of the wait-owner marker. fm-classify-lib.sh's
+# status_wait_on_captain owns what it means; this only tells a worker when to
+# write it, because a supervisor cannot tell a wait on the captain from a wait on
+# the world by reading the wait's prose.
+CREWMATE_PAUSE_ON_CAPTAIN="When the captain already holds the work and only their own act can end the wait - a project they deferred, a hold they took, a merge word they owe - write it as \`$PAUSED_VERB $WAIT_ON_CAPTAIN_TAG: {why}\`, and firstmate stops rechecking a wait nobody but the captain can end. A decision you have not yet asked is not such a wait: append \`needs-decision [at=<epoch>]: {summary of options}\` for it instead, so it stays open until it is answered."
 IFS= read -r -d '' CREWMATE_PAUSE_INSTRUCTIONS <<EOF || true
    Use \`$PAUSED_VERB: {why}\` - distinct from \`blocked:\` - when deliberately waiting for work or an external condition expected to clear on its own, including your own validation round.
    Before ending your turn with your own background shell or monitor still running, or before waiting on your own pipeline run or a long foreground command, append \`$PAUSED_VERB [at=<epoch>]: {job and completion condition}\` to the status file.
@@ -151,6 +157,7 @@ IFS= read -r -d '' CREWMATE_PAUSE_INSTRUCTIONS <<EOF || true
    Firstmate may still raise one first-sight alert; the declared wait then uses the existing long recheck cadence instead of repeated possible-wedge alarms.
    When you know when the wait clears, include \`until <YYYY-MM-DDTHH:MMZ>\` (UTC) for a recheck at that time.
    Follow the resolution rule below when the wait clears, then resume the task.
+   $CREWMATE_PAUSE_ON_CAPTAIN
    Use \`blocked:\` when you are stuck and need help.
 EOF
 
@@ -430,6 +437,7 @@ Report only true captain-relevant outcomes or a declared external wait by append
 States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
 Substitute \`<epoch>\` with the current Unix time in seconds - run \`date +%s\` and write the number it printed; a stamp that is not plain digits records no time at all.
 Use \`$PAUSED_VERB: {why}\` (distinct from \`blocked:\`) only when your domain is deliberately idling on a known external wait you expect to clear on its own, naming when it clears with \`until <YYYY-MM-DDTHH:MMZ>\` (UTC) when you know; use \`blocked:\` when you are stuck and need firstmate to act.
+$CREWMATE_PAUSE_ON_CAPTAIN
 Use this only for material phase changes, a captain decision, a real blocker, a failure, work ready for review, or work you landed.
 Work you landed includes a merge you performed yourself under standing merge authority and one the captain merged on the forge: under that authority nothing is ever \"ready for review\", so a landed merge that goes unreported reaches the captain as silence.
 This is also how you return the answer to a marked from-firstmate request above.

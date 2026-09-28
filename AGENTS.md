@@ -269,6 +269,7 @@ No turn ends blind while work is under way, including turns described as holding
 - After any supervision-branch acknowledgement succeeds or reports that a sequence is already processed, never acknowledge that sequence again or retry the refusal.
 - A status line is a wake event, not current state; use `bin/fm-crew-state.sh` when current state matters, especially before re-escalating an old decision, blocker, or pause.
 - `bin/fm-classify-lib.sh` owns the distinction between declared `paused:` waits and `blocked:` events needing firstmate action; `bin/fm-brief.sh` owns worker declaration instructions.
+- A `paused` line carrying `[on=captain]` before its colon is instead a wait only the captain's own act can end; it is surfaced once and never rechecked, so do not re-escalate it (`bin/fm-classify-lib.sh` owns that marker).
 
 Handle actionable wakes as follows:
 

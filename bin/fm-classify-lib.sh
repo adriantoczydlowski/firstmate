@@ -118,8 +118,11 @@ FM_CLASSIFY_PAUSED_VERB_DEFAULT='paused'
 # names it with `until` (status_paused_until below) and is rechecked at that
 # time or this cadence bound, whichever comes first. Both consumers read
 # FM_PAUSE_RESURFACE_SECS with this default so
-# the cadence has one owner. An item held for the captain is not rechecked at all
-# while the away-posture record exists (bin/fm-watch.sh owns that rule).
+# the cadence has one owner. A wait on the captain (status_wait_on_captain
+# below) is outside this cadence entirely: it is surfaced once per declaration
+# and never rechecked, because no recheck can change a wait only the captain can
+# end, and while the away-posture record exists it is not surfaced at all
+# (bin/fm-watch.sh owns which absorb path applies to each).
 # shellcheck disable=SC2034 # Read by the watcher and daemon (fm-watch.sh, fm-supervise-daemon.sh), not this lib.
 FM_PAUSE_RESURFACE_SECS_DEFAULT=14400
 
@@ -145,6 +148,24 @@ fm_utc_iso_to_epoch() {  # <timestamp>
 # fm-captain-hold.sh has verified the corresponding captain-held backlog item.
 FM_CLASSIFY_RESOLVE_VERB_DEFAULT='resolved'
 FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT='captain-held'
+
+# The structural marker that names the captain as the one who must act for a
+# declared wait to clear:
+#   paused [on=captain]: awaiting the captain's merge word
+# It is an ordinary "[name=value]" metadata tag in the documented before-the-colon
+# position (see the decision key grammar below), so it changes no existing parse:
+# status_line_verb already ends the verb at the first bracket, and the note keeps
+# every byte after the colon.
+# A marker is required because the fact is not derivable from the wait's prose.
+# "awaiting the captain's merge word" and "awaiting the upstream release" are the
+# same sentence shape to every reader but the worker who wrote them, and a
+# supervisor that guessed wrong would either nag the captain about a wait they
+# cannot end or silence one that nobody is watching. Matching prose would also
+# make the vocabulary unstateable: a worker could not phrase an external wait
+# that merely MENTIONS the captain without being silenced for it.
+# bin/fm-brief.sh owns the worker-facing instruction that writes it.
+# FM_CLASSIFY_WAIT_ON_CAPTAIN_TAG overrides the token.
+FM_CLASSIFY_WAIT_ON_CAPTAIN_TAG_DEFAULT='[on=captain]'
 
 # How many trailing lines the latest-event read parses before it widens to the
 # whole file. A status record and its continuation prose sit within a few lines
@@ -413,6 +434,40 @@ _fm_status_declared_wait_scan() {  # <resolve-verb> <legacy-captain-re>
     return 0
   done
   return 1
+}
+
+# 0 if a status line declares a wait whose ONLY clearing act is the captain's own.
+# This is the one owner of that question, and it answers it from structure alone,
+# never from the wait's prose:
+#   - the verified captain-held transfer verb, which is by definition on the
+#     captain (bin/fm-captain-hold.sh writes it only after verifying the hold);
+#   - a `paused:` line carrying the wait-owner marker above before its colon.
+# A marker deeper inside the note is prose, exactly as a deeper "[key=x]" is, so
+# a wait that merely quotes the marker cannot silence itself.
+# The supervisors use it to keep such a wait out of the recheck cadence
+# altogether: a recheck asks whether a wait still holds, and a wait the captain
+# has not yet ended always still holds, so every recheck of one is noise that
+# reaches the captain as a stale: wake about work they already have in hand.
+status_wait_on_captain() {  # <status-line>
+  local line=$1 head
+  [ -n "$line" ] || return 1
+  status_is_captain_held "$line" && return 0
+  status_is_paused "$line" || return 1
+  head=${line%%:*}
+  case "$head" in
+    *"${FM_CLASSIFY_WAIT_ON_CAPTAIN_TAG:-$FM_CLASSIFY_WAIT_ON_CAPTAIN_TAG_DEFAULT}"*) return 0 ;;
+  esac
+  return 1
+}
+
+# The scope a declared wait's sighting is recorded against: the declaring status
+# file's observed signature, so an unchanged declaration is one scope however its
+# pane churns and a re-declaration is a new one. bin/fm-watch.sh keys its
+# .paused-resurfaced-<key> throttle to it, and bin/fm-supervise-daemon.sh reads
+# and writes that same throttle for a wait on the captain, so the one sighting
+# such a wait is owed is one sighting across both supervisors.
+status_wait_declaration_scope() {  # <status-file>
+  printf 'declared:%s' "$(status_observed_signature "$1" || true)"
 }
 
 # A condition-aware declared wait: a `paused:` line may say WHEN it expects to

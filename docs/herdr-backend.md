@@ -751,8 +751,8 @@ The watcher maps the pane back to the task and skips these:
 - Secondmate endpoints.
 - Declared `paused:` waits, because the worker's declared wait already accounts for its quiet.
   It is left to the watcher's own bounded pause cadence.
-- Verified `captain-held` transfers.
-  A captain-held transfer remains silent without rechecks while the away-posture record exists.
+- Waits only the captain can end: a verified `captain-held` transfer, or a `paused` line carrying `[on=captain]`.
+  Such a wait is never rechecked in either posture; it is surfaced once per declaration while attended, and stays silent entirely while the away-posture record exists.
 
 ### Polling fallback
 

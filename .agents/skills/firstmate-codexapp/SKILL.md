@@ -63,6 +63,7 @@ For a Firstmate-managed task, include an explicit status instruction:
 Append supervisor-visible status lines to <absolute-firstmate-home>/state/<task-id>.status.
 Use only these prefixes for status changes: working:, needs-decision:, blocked:, paused:, done:, failed:.
 Follow the task brief's status-reporting rule for declaring and resolving waits; bin/fm-brief.sh owns that rule.
+When only the captain's own act can end the wait, write paused [on=captain]: {why} instead, so it is surfaced once and never rechecked.
 Before doing substantive work, append "working: Codex Desktop thread started".
 ```
 
