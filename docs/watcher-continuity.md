@@ -511,7 +511,7 @@ It also covers generation-claim single-flight, stuck-claim supersession, superse
 
 `tests/fm-session-lock-ancestry.test.sh` covers the recovery boundary itself with real processes and no harness: a session rehosted outside its own process tree owning the lock it cannot reach, a co-located session with no launch relationship still refused, a launch relationship alone refused across containers, each co-location signal carrying the verdict with the other driven apart, a real suspended holder releasing and holding again on resume, and the command names a real install reports being typed while near misses are not.
 
-`FM_SESSION_LOCK_IDENTITY_LIVE=1 tests/fm-session-lock-identity-live-e2e.test.sh` is the opt-in guard that proves the same boundary against every installed harness and fails naming the harness and version.
+`tests/fm-session-lock-identity-live-e2e.test.sh` is the default-on guard that proves the same boundary against every installed harness and fails naming the harness and version; it runs automatically whenever tmux is present, and `FM_SESSION_LOCK_IDENTITY_LIVE=1` only turns a missing-tooling skip into a hard failure.
 
 `FM_CLAUDE_LIVE_E2E=1 tests/fm-claude-stop-autoarm-live-e2e.test.sh`:
 
