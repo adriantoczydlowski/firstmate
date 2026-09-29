@@ -951,9 +951,7 @@ test_return_brief_lists_a_wait_declared_on_the_captain() {
   local dir out waiting
   dir="$TMP_ROOT/brief-wait-on-captain"
   install_runner "$dir"
-  contract_in "$dir" propose --words 'hold the merge word until I am back' \
-    --action merge --object 'task parked PR' --when 'checks green' >/dev/null 2>&1 || fail "could not propose the away-posture record"
-  contract_in "$dir" confirm >/dev/null 2>&1 || fail "could not confirm the away-posture record"
+  contract_in "$dir" enter --words 'hold the merge word until I am back' >/dev/null 2>&1 || fail "could not record the away posture"
   printf 'window=synthetic:fm-parked\nbackend=tmux\nkind=ship\n' > "$dir/home/state/parked.meta"
   printf 'working: PR opened\npaused [on=captain]: awaiting the captain on the merge word\n' > "$dir/home/state/parked.status"
   printf 'window=synthetic:fm-vendor\nbackend=tmux\nkind=ship\n' > "$dir/home/state/vendor.meta"
