@@ -1,0 +1,12 @@
+# Live validation of the chrome-devtools-axi browser-launch probe added to bin/fm-bootstrap.sh
+# Host state: chrome-devtools-axi is installed (0.1.34) but /opt/google/chrome/chrome does not exist here.
+
+## BASE commit 23e5584714e6765cc223a1740d385d0e85f8ad8e (before fix)
+$ timeout 90 env FM_HOME=<scratch> FM_ROOT_OVERRIDE=<scratch> FM_BOOTSTRAP_NETWORK=only bash bin/fm-bootstrap.sh
+EXIT:0
+(no output at all — the broken browser is not detected; a worker would only discover this mid-task)
+
+## TARGET commit b45f4aff376d2607c5790cede5319dcc9dd6fe55 (after fix)
+$ timeout 90 env FM_HOME=<scratch> FM_ROOT_OVERRIDE=<scratch> FM_BOOTSTRAP_NETWORK=only bash bin/fm-bootstrap.sh
+BROWSER_UNAVAILABLE: chrome-devtools-axi cannot launch a browser (Could not find Google Chrome executable for channel 'stable' at: - /opt/google/chrome/chrome.) - workers cannot verify UI behavior in a browser; other work may proceed; configure a launchable browser and rerun bootstrap before relying on browser verification
+EXIT:0
