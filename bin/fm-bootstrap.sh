@@ -8,7 +8,8 @@
 #          Lines: "MISSING: <tool> (install: <command>)",
 #                 "PRESENTATION_UNAVAILABLE: lavish-axi (requires >=<floor>; install: <command>) - nonvisual work may proceed with plain-text decisions and reports; install or upgrade before using Lavish",
 #                 "MISSING_MANUAL: <tool> (instructions: <url>)", "NEEDS_GH_AUTH",
-#                 "BROWSER_UNAVAILABLE: chrome-devtools-axi cannot launch a browser (<reason>) - workers cannot verify UI behavior in a browser; other work may proceed; configure a launchable browser and rerun bootstrap before relying on browser verification",
+#                 "BROWSER_UNAVAILABLE: chrome-devtools-axi cannot launch a browser (<reason>) - workers cannot verify UI behavior in a browser; other work may proceed; configure a launchable browser and rerun bootstrap before relying on browser verification; this probe checks bootstrap's own environment as a proxy, not a spawned worker's actual environment, so a worker on a different PATH or a stricter config/launch-env-allowlist can still fail even when this probe succeeds",
+#                 "BROWSER_PROBE_CLEANUP: chrome-devtools-axi <did not stop within <n>s|stop exited <n>> for probe session <session> - a probe browser may still be running under it; run CHROME_DEVTOOLS_AXI_SESSION=<session> chrome-devtools-axi stop to confirm cleanup",
 #                 "BACKEND_INVALID: <name> (known: <names>)",
 #                 "STARTUP_MEMORY_BUDGET: invalid config/startup-memory-budget - <reason>",
 #                 "CREW_DISPATCH: invalid config/crew-dispatch.json - <reason>",
@@ -1432,33 +1433,71 @@ detect_local_tools() {
 # bridge port nor open a visible window; every other setting stays as workers
 # inherit it. The verdict is the open command's exit status. The bridge detaches
 # into its own process group beyond fm_run_timed's reach, so the bounded stop
-# runs whether or not the open succeeded.
+# runs whether or not the open succeeded. The stop bound is a fixed 15s, and
+# the open bound is capped to leave that 15s inside the deferred network
+# stage's own FM_STARTUP_NETWORK_TIMEOUT budget (default 120s): otherwise a
+# short outer deadline could end the stage before it reaches this wait and
+# prints the buffered result, reporting a generic NETWORK_CHECKS timeout
+# instead of the actual browser-launch finding. A stop that fails or hits its
+# bound is reported rather than discarded - the bridge can outlive the timed
+# command, so a probe browser may still be running under the per-home probe
+# session named in that line.
+# This probe only proves that bootstrap's OWN process can launch a browser; it
+# is a proxy for a spawned worker's launch, not that launch itself. A worker's
+# destination pane can carry a different PATH, or (when config/launch-env-allowlist
+# is present) drop a CHROME_DEVTOOLS_AXI_* setting the allowlist omits, so a
+# probe that passes here can still leave a worker unable to open a browser.
+# See the BROWSER_UNAVAILABLE and "Missing-tool diagnostics" wording for the
+# caveat surfaced to the captain; matching that filtering exactly is future work.
+browser_probe_stop_bound() { echo 15; }
+
 browser_probe_timeout() {
+  local requested budget cap
   case "${FM_BROWSER_PROBE_TIMEOUT:-}" in
-    ''|*[!0-9]*|0) echo 45 ;;
-    *) echo "$FM_BROWSER_PROBE_TIMEOUT" ;;
+    ''|*[!0-9]*|0) requested=45 ;;
+    *) requested=$FM_BROWSER_PROBE_TIMEOUT ;;
   esac
+  case "${FM_STARTUP_NETWORK_TIMEOUT:-}" in
+    ''|*[!0-9]*|0) budget=120 ;;
+    *) budget=$FM_STARTUP_NETWORK_TIMEOUT ;;
+  esac
+  cap=$(( budget - $(browser_probe_stop_bound) ))
+  [ "$cap" -ge 1 ] || cap=1
+  [ "$requested" -le "$cap" ] || requested=$cap
+  echo "$requested"
 }
 
 browser_launch_probe() {
-  local session timeout out rc reason
+  local session timeout stop_timeout out rc reason stop_rc stop_reason
   command -v chrome-devtools-axi >/dev/null 2>&1 || return 0
   session="fm-bootstrap-probe-$(printf '%s' "$FM_HOME" | cksum | cut -d' ' -f1)"
   timeout=$(browser_probe_timeout)
+  stop_timeout=$(browser_probe_stop_bound)
   out=$(fm_run_timed "$timeout" env -u CHROME_DEVTOOLS_AXI_PORT -u CHROME_DEVTOOLS_AXI_HEADED \
     CHROME_DEVTOOLS_AXI_SESSION="$session" \
     chrome-devtools-axi open 'data:text/html,<title>fm-bootstrap-probe</title>ok' 2>&1)
   rc=$?
-  fm_run_timed 15 env -u CHROME_DEVTOOLS_AXI_PORT CHROME_DEVTOOLS_AXI_SESSION="$session" \
-    chrome-devtools-axi stop >/dev/null 2>&1 || true
-  [ "$rc" -ne 0 ] || return 0
-  if fm_timed_out "$rc"; then
-    reason="no page opened within ${timeout}s"
-  else
-    reason=$(printf '%s\n' "$out" | sed -n 's/^error: *//p' | head -n 1 | tr -d '"' | sed 's/\\n/ /g' | tr -s ' ' | cut -c1-200)
-    [ -n "$reason" ] || reason="open exited $rc"
+  fm_run_timed "$stop_timeout" env -u CHROME_DEVTOOLS_AXI_PORT CHROME_DEVTOOLS_AXI_SESSION="$session" \
+    chrome-devtools-axi stop >/dev/null 2>&1
+  stop_rc=$?
+  if [ "$rc" -ne 0 ]; then
+    if fm_timed_out "$rc"; then
+      reason="no page opened within ${timeout}s"
+    else
+      reason=$(printf '%s\n' "$out" | sed -n 's/^error: *//p' | head -n 1 | tr -d '"' | sed 's/\\n/ /g' | tr -s ' ' | cut -c1-200)
+      [ -n "$reason" ] || reason="open exited $rc"
+    fi
+    echo "BROWSER_UNAVAILABLE: chrome-devtools-axi cannot launch a browser ($reason) - workers cannot verify UI behavior in a browser; other work may proceed; configure a launchable browser and rerun bootstrap before relying on browser verification; this probe checks bootstrap's own environment as a proxy, not a spawned worker's actual environment, so a worker on a different PATH or a stricter config/launch-env-allowlist can still fail even when this probe succeeds"
   fi
-  echo "BROWSER_UNAVAILABLE: chrome-devtools-axi cannot launch a browser ($reason) - workers cannot verify UI behavior in a browser; other work may proceed; configure a launchable browser and rerun bootstrap before relying on browser verification"
+  if [ "$stop_rc" -ne 0 ]; then
+    if fm_timed_out "$stop_rc"; then
+      stop_reason="did not stop within ${stop_timeout}s"
+    else
+      stop_reason="stop exited $stop_rc"
+    fi
+    echo "BROWSER_PROBE_CLEANUP: chrome-devtools-axi $stop_reason for probe session $session - a probe browser may still be running under it; run CHROME_DEVTOOLS_AXI_SESSION=$session chrome-devtools-axi stop to confirm cleanup"
+  fi
+  return 0
 }
 
 detect_local_config() {

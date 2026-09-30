@@ -1243,16 +1243,24 @@ ROWS
 
 # A chrome-devtools-axi stub that records each call's command and the browser
 # settings it saw, then behaves per FM_FAKE_BROWSER: ok opens, fail prints the
-# tool's own launch error, hang never returns.
+# tool's own launch error, hang never returns from open, stopfail makes `stop`
+# itself fail, hangstop makes `stop` never return.
 add_browser_probe_stub() {
   local fakebin=$1
   cat > "$fakebin/chrome-devtools-axi" <<'SH'
 #!/usr/bin/env bash
 printf '%s session=%s port=%s headed=%s\n' "${1:-}" "${CHROME_DEVTOOLS_AXI_SESSION:-}" \
   "${CHROME_DEVTOOLS_AXI_PORT:-unset}" "${CHROME_DEVTOOLS_AXI_HEADED:-unset}" >> "$FM_FAKE_BROWSER_LOG"
+if [ "${1:-}" = stop ]; then
+  case "${FM_FAKE_BROWSER:-ok}" in
+    stopfail) exit 1 ;;
+    hangstop) exec perl -e 'sleep 30' ;;
+  esac
+  exit 0
+fi
 [ "${1:-}" = open ] || exit 0
 case "${FM_FAKE_BROWSER:-ok}" in
-  ok) printf '%s\n' 'page:' '  title: fm-bootstrap-probe' ;;
+  ok|stopfail|hangstop) printf '%s\n' 'page:' '  title: fm-bootstrap-probe' ;;
   fail)
     printf '%s\n' 'error: "Could not find Google Chrome executable for channel '"'"'stable'"'"' at:\n - /opt/google/chrome/chrome."' 'code: UNKNOWN'
     exit 1 ;;
@@ -1290,7 +1298,7 @@ test_browser_launch_probe() {
   assert_no_grep 'session=worker-1' "$log" "the probe touched the ambient worker session"
 
   run_probe_case fail
-  [ "$out" = "BROWSER_UNAVAILABLE: chrome-devtools-axi cannot launch a browser (Could not find Google Chrome executable for channel 'stable' at: - /opt/google/chrome/chrome.) - workers cannot verify UI behavior in a browser; other work may proceed; configure a launchable browser and rerun bootstrap before relying on browser verification" ] \
+  [ "$out" = "BROWSER_UNAVAILABLE: chrome-devtools-axi cannot launch a browser (Could not find Google Chrome executable for channel 'stable' at: - /opt/google/chrome/chrome.) - workers cannot verify UI behavior in a browser; other work may proceed; configure a launchable browser and rerun bootstrap before relying on browser verification; this probe checks bootstrap's own environment as a proxy, not a spawned worker's actual environment, so a worker on a different PATH or a stricter config/launch-env-allowlist can still fail even when this probe succeeds" ] \
     || fail "an unlaunchable browser must report its launch error, got: $out"
   grep -q '^stop session=fm-bootstrap-probe-' "$log" || fail "a failed open must still stop the probe session"
 
@@ -1315,6 +1323,74 @@ test_browser_launch_probe() {
   assert_contains "$out" 'MISSING: chrome-devtools-axi (install:' "an absent tool must still report MISSING"
   assert_not_contains "$out" 'BROWSER_UNAVAILABLE' "an absent tool must not also report a launch failure"
   pass "bootstrap proves chrome-devtools-axi can launch a browser, bounded and off the blocking path"
+}
+
+# The probe's open bound must be capped so it plus the fixed 15s stop bound can
+# never exceed the deferred network stage's own FM_STARTUP_NETWORK_TIMEOUT
+# budget - otherwise a short outer deadline could end the stage before it ever
+# prints the probe's buffered BROWSER_UNAVAILABLE finding.
+test_browser_launch_probe_timeout_capped_to_network_budget() {
+  local case_dir fakebin log out start elapsed
+  case_dir="$TMP_ROOT/browser-probe-budget-cap"
+  mkdir -p "$case_dir/home/config"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  add_browser_probe_stub "$fakebin"
+  log="$case_dir/browser.log"
+
+  : > "$log"
+  start=$(date +%s)
+  out=$(env PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_FAKE_BROWSER=hang FM_FAKE_BROWSER_LOG="$log" \
+    FM_BROWSER_PROBE_TIMEOUT=200 FM_STARTUP_NETWORK_TIMEOUT=20 \
+    "$ROOT/bin/fm-bootstrap.sh")
+  elapsed=$(( $(date +%s) - start ))
+  [ "$elapsed" -lt 20 ] || fail "an outer-budget-capped probe stalled bootstrap for ${elapsed}s"
+  assert_contains "$out" 'BROWSER_UNAVAILABLE: chrome-devtools-axi cannot launch a browser (no page opened within 5s)' \
+    "a requested bound (200s) bigger than the stage budget (20s) minus the fixed 15s stop bound must be capped to 5s"
+
+  : > "$log"
+  start=$(date +%s)
+  out=$(env PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_FAKE_BROWSER=hang FM_FAKE_BROWSER_LOG="$log" \
+    FM_BROWSER_PROBE_TIMEOUT=200 FM_STARTUP_NETWORK_TIMEOUT=5 \
+    "$ROOT/bin/fm-bootstrap.sh")
+  elapsed=$(( $(date +%s) - start ))
+  [ "$elapsed" -lt 20 ] || fail "a budget smaller than the fixed stop bound stalled bootstrap for ${elapsed}s"
+  assert_contains "$out" 'BROWSER_UNAVAILABLE: chrome-devtools-axi cannot launch a browser (no page opened within 1s)' \
+    "a budget (5s) smaller than the fixed 15s stop bound must still floor the open bound at 1s, never 0 or negative"
+
+  pass "the browser probe's open bound is capped so it plus the fixed stop bound never exceeds FM_STARTUP_NETWORK_TIMEOUT"
+}
+
+# A stop that fails or hits its bound must be reported, not discarded: the
+# bridge can outlive the timed command and leave a probe browser running.
+test_browser_launch_probe_stop_failure_reported() {
+  local case_dir fakebin log out
+  case_dir="$TMP_ROOT/browser-probe-stop-failure"
+  mkdir -p "$case_dir/home/config"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  add_browser_probe_stub "$fakebin"
+  log="$case_dir/browser.log"
+
+  : > "$log"
+  out=$(env PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_FAKE_BROWSER=stopfail FM_FAKE_BROWSER_LOG="$log" \
+    "$ROOT/bin/fm-bootstrap.sh")
+  assert_not_contains "$out" 'BROWSER_UNAVAILABLE' "a launchable browser must not also report a launch failure"
+  assert_contains "$out" 'BROWSER_PROBE_CLEANUP: chrome-devtools-axi stop exited 1' \
+    "a failed stop must be reported, not discarded"
+  assert_contains "$out" 'fm-bootstrap-probe-' "the cleanup line must name the per-home probe session"
+
+  : > "$log"
+  out=$(env PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_FAKE_BROWSER=hangstop FM_FAKE_BROWSER_LOG="$log" \
+    "$ROOT/bin/fm-bootstrap.sh")
+  assert_contains "$out" 'BROWSER_PROBE_CLEANUP: chrome-devtools-axi did not stop within 15s' \
+    "a stop that hits its bound must be reported with the bound it hit"
+
+  pass "the browser probe reports a failed or timed-out cleanup instead of discarding it"
 }
 
 test_bootstrap_reporting
@@ -1346,3 +1422,5 @@ test_tasks_axi_verdict_handoff_is_consumed_once
 test_crew_dispatch_active_rules_are_verbose_bootstrap_info
 test_crew_dispatch_validation
 test_browser_launch_probe
+test_browser_launch_probe_timeout_capped_to_network_budget
+test_browser_launch_probe_stop_failure_reported
