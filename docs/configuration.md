@@ -1271,6 +1271,9 @@ A herdr, zellij, or cmux home is therefore never told `tmux` is missing, and the
 - An absent or incompatible `gh-axi` reports `MISSING: gh-axi (install: npm install -g gh-axi && gh-axi setup hooks)`.
 - An absent or incompatible `lavish-axi` reports `PRESENTATION_UNAVAILABLE` with its required floor, install command, and explicit text fallback; [`bootstrap-diagnostics`](../.agents/skills/bootstrap-diagnostics/SKILL.md) owns the response and compatibility check before visual use.
 - An absent or too-old `quota-axi` reports `MISSING: quota-axi (install: npm install -g quota-axi)`; firstmate cannot resolve a profile array without a compatible binary.
+- An installed `chrome-devtools-axi` that cannot launch a browser reports `BROWSER_UNAVAILABLE` with the tool's own launch error, because its default launch finds Chrome only at a release channel's fixed install path.
+  The deferred startup stage proves the launch with a bounded headless probe under a dedicated per-home session, so a worker does not discover the gap mid-task; [`bin/fm-bootstrap.sh`](../bin/fm-bootstrap.sh) owns the probe and [`bootstrap-diagnostics`](../.agents/skills/bootstrap-diagnostics/SKILL.md) owns the response.
+  The fix is a browser `chrome-devtools-axi --help` can reach, set where workers inherit it and named in `config/launch-env-allowlist` when that file exists ("Worker launch environment" above).
 
 **Checkout diagnostics**
 

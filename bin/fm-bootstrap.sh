@@ -8,6 +8,7 @@
 #          Lines: "MISSING: <tool> (install: <command>)",
 #                 "PRESENTATION_UNAVAILABLE: lavish-axi (requires >=<floor>; install: <command>) - nonvisual work may proceed with plain-text decisions and reports; install or upgrade before using Lavish",
 #                 "MISSING_MANUAL: <tool> (instructions: <url>)", "NEEDS_GH_AUTH",
+#                 "BROWSER_UNAVAILABLE: chrome-devtools-axi cannot launch a browser (<reason>) - workers cannot verify UI behavior in a browser; other work may proceed; configure a launchable browser and rerun bootstrap before relying on browser verification",
 #                 "BACKEND_INVALID: <name> (known: <names>)",
 #                 "STARTUP_MEMORY_BUDGET: invalid config/startup-memory-budget - <reason>",
 #                 "CREW_DISPATCH: invalid config/crew-dispatch.json - <reason>",
@@ -64,6 +65,12 @@
 #          nonvisual dispatch continues with plain-text decisions and reports,
 #          but Lavish use still requires a compatible build at or above its floor.
 #          tasks-axi feature probes remain a separate defense-in-depth check.
+#          An installed chrome-devtools-axi must also launch a browser: the
+#          network phase opens a self-contained page headless under a dedicated
+#          per-home session and stops it, bounded by FM_BROWSER_PROBE_TIMEOUT
+#          (positive seconds, default 45), and reports BROWSER_UNAVAILABLE when
+#          no page opens. It runs only in a lock-owning run, never under
+#          FM_BOOTSTRAP_DETECT_ONLY=1; browser_launch_probe owns the details.
 #          tasks-axi and quota-axi are essential bootstrap tools.
 #          A compatible tasks-axi default backend is silent.
 #          quota-axi is required for the agent-owned dispatch-profile array
@@ -121,7 +128,8 @@
 #                 step. Unrecognized values fall back here on purpose: a typo
 #                 must never silently skip a safety sweep.
 #            skip - every LOCAL step, and none of the network ones. Skips
-#                 `gh auth status`, secondmate_liveness_sweep, secondmate_sync,
+#                 `gh auth status`, the browser launch probe,
+#                 secondmate_liveness_sweep, secondmate_sync,
 #                 secondmate_handoff_resume, and fleet_sync.
 #            only - ONLY those network steps and nothing else. No tool detection,
 #                 no version floors, no tangle check, no backlog
@@ -171,6 +179,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 # shellcheck source=bin/fm-backlog-transition-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
+# shellcheck source=bin/fm-timeout-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-quota-axi-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-quota-axi-lib.sh"
 # shellcheck source=bin/fm-control-lib.sh disable=SC1091
@@ -1413,6 +1423,44 @@ detect_local_tools() {
   fi
 }
 
+# chrome-devtools-axi launch probe. Presence in COMMON_TOOLS does not prove the
+# tool can start a browser: its launch mode finds Chrome only at a channel's
+# fixed install path, so a host without one fails at a worker's first `open`.
+# This opens a self-contained page headless under a dedicated per-home session,
+# never a worker's own, then stops that session. The ambient port and headed
+# overrides are cleared so the probe can neither collide with a live session's
+# bridge port nor open a visible window; every other setting stays as workers
+# inherit it. The verdict is the open command's exit status. The bridge detaches
+# into its own process group beyond fm_run_timed's reach, so the bounded stop
+# runs whether or not the open succeeded.
+browser_probe_timeout() {
+  case "${FM_BROWSER_PROBE_TIMEOUT:-}" in
+    ''|*[!0-9]*|0) echo 45 ;;
+    *) echo "$FM_BROWSER_PROBE_TIMEOUT" ;;
+  esac
+}
+
+browser_launch_probe() {
+  local session timeout out rc reason
+  command -v chrome-devtools-axi >/dev/null 2>&1 || return 0
+  session="fm-bootstrap-probe-$(printf '%s' "$FM_HOME" | cksum | cut -d' ' -f1)"
+  timeout=$(browser_probe_timeout)
+  out=$(fm_run_timed "$timeout" env -u CHROME_DEVTOOLS_AXI_PORT -u CHROME_DEVTOOLS_AXI_HEADED \
+    CHROME_DEVTOOLS_AXI_SESSION="$session" \
+    chrome-devtools-axi open 'data:text/html,<title>fm-bootstrap-probe</title>ok' 2>&1)
+  rc=$?
+  fm_run_timed 15 env -u CHROME_DEVTOOLS_AXI_PORT CHROME_DEVTOOLS_AXI_SESSION="$session" \
+    chrome-devtools-axi stop >/dev/null 2>&1 || true
+  [ "$rc" -ne 0 ] || return 0
+  if fm_timed_out "$rc"; then
+    reason="no page opened within ${timeout}s"
+  else
+    reason=$(printf '%s\n' "$out" | sed -n 's/^error: *//p' | head -n 1 | tr -d '"' | sed 's/\\n/ /g' | tr -s ' ' | cut -c1-200)
+    [ -n "$reason" ] || reason="open exited $rc"
+  fi
+  echo "BROWSER_UNAVAILABLE: chrome-devtools-axi cannot launch a browser ($reason) - workers cannot verify UI behavior in a browser; other work may proceed; configure a launchable browser and rerun bootstrap before relying on browser verification"
+}
+
 detect_local_config() {
   # Worktree-tangle check: the firstmate primary checkout (FM_ROOT) must sit on its
   # default branch, not a feature branch (see fm-tangle-lib.sh). Scoped to the
@@ -1557,6 +1605,27 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
       fm_timing_record phase fleet-sync "$__fm_timing_stamp"
     fi
   fi
+  # The browser probe launches a real browser for up to its own bound, so it
+  # rides the deferred stage off the digest's blocking path and overlaps the
+  # sweeps below. It runs only under fleet-lock ownership, so a read-only second
+  # session never races the lock holder's probe for the same per-home session.
+  browser_probe_pid=
+  browser_probe_out=
+  if network_phase && network_sweep_authorized 'browser launch probe'; then
+    browser_probe_out=$(mktemp "${TMPDIR:-/tmp}/fm-bootstrap-browser.XXXXXX") || browser_probe_out=
+    if [ -n "$browser_probe_out" ]; then
+      (
+        __fm_timing_stamp=$(fm_timing_now_ms)
+        browser_launch_probe
+        fm_timing_record phase browser-probe "$__fm_timing_stamp"
+      ) >"$browser_probe_out" 2>&1 &
+      browser_probe_pid=$!
+    else
+      __fm_timing_stamp=$(fm_timing_now_ms)
+      browser_launch_probe
+      fm_timing_record phase browser-probe "$__fm_timing_stamp"
+    fi
+  fi
   if network_phase; then
     if network_sweep_authorized 'dead-secondmate relaunch'; then
       __fm_timing_stamp=$(fm_timing_now_ms)
@@ -1587,6 +1656,11 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
     wait "$fleet_sync_pid" || true
     cat "$fleet_sync_out"
     rm -f "$fleet_sync_out"
+  fi
+  if [ -n "$browser_probe_pid" ]; then
+    wait "$browser_probe_pid" || true
+    cat "$browser_probe_out"
+    rm -f "$browser_probe_out"
   fi
 fi
 local_phase && secondmate_handoff_detect
