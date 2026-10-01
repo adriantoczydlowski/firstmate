@@ -20,11 +20,37 @@
 #   fm-time.sh log --start "<YYYY-MM-DD HH:MM>" --end "<YYYY-MM-DD HH:MM>"
 #                   [--project <name>] [--task <name>] --desc <text>
 #   fm-time.sh report [--month YYYY-MM] [--project <name>]
+#   fm-time.sh capture <task-id> [--no-commits]
+#                   (called by bin/fm-teardown.sh, not by hand; see "Teardown
+#                   capture" below)
 #
 # Evidence signals (propose). Investigated candidates and why each is used or
 # skipped:
-#   - state/<id>.status mtime         used: last-touch ping for that task, tagged
-#                                      with the tail status line as its evidence text.
+#   - state/<id>.status replay        used for every task kind: each line's
+#                                      [at=<epoch>] stamp and verb (grammar owned by
+#                                      bin/fm-classify-lib.sh) are replayed in time
+#                                      order. A working or resolved line opens active
+#                                      work, which a paused, blocked, needs-decision,
+#                                      done, or failed line closes; the elapsed time
+#                                      between is an interval credited as measured,
+#                                      not padded. A paused, blocked, or
+#                                      needs-decision span closed by a later line is
+#                                      a declared wait: it is carved out of every
+#                                      credited window for that task (a ping inside it
+#                                      is absorbed, an interval or commit span is cut
+#                                      around it, a pad never runs into it, and
+#                                      windows never merge across it), and it is
+#                                      listed as evidence marked "not credited". Work
+#                                      still active at the last line is credited the
+#                                      pad past it. A done or failed line with no open
+#                                      active span is a lone ping. Lines without a
+#                                      stamp are skipped. With fewer than two stamped
+#                                      lines the file falls back to one last-touch
+#                                      ping at its mtime, credited the pad and tagged
+#                                      with its tail line.
+#                                      Teardown deletes the file, so its lines are
+#                                      also replayed from the task's evidence record
+#                                      (below); a line present in both counts once.
 #   - state/<id>.meta mtime           used: a task's earliest activity often
 #                                      predates its first status line, but this
 #                                      file is also rewritten well after spawn
@@ -40,9 +66,9 @@
 #                                      task closed with --report), and "(merged
 #                                      YYYY-MM-DD)" (tasks-axi writes this for a
 #                                      task closed with --pr) entries all become
-#                                      day-only pings (noon local), the one
-#                                      signal that survives a torn-down task's
-#                                      state files.
+#                                      day-only pings (noon local), the only
+#                                      signal left for a task torn down without
+#                                      an evidence record (below).
 #   - state/.wake-queue                used opportunistically: it carries real epoch
 #                                      seconds, but the queue is drained on
 #                                      acknowledgement, so it holds only whatever is
@@ -50,11 +76,25 @@
 #   - session lock (state/.lock)       NOT used: one file, one mtime, no history -
 #                                      it names only the current holder, so it cannot
 #                                      answer "when was work happening" after the fact.
-#   - project git commit history       NOT used in this version: firstmate's own
-#                                      projects/<name> clones sit on their default
-#                                      branch, so this would see only merged work, not
-#                                      the in-flight branches a captain most wants
-#                                      tracked. Left as a documented future signal.
+#   - task commit span                used for ship and scout tasks only, read
+#                                      from the evidence record teardown captured:
+#                                      the first-to-last commit time on the task's
+#                                      own work, an interval credited as measured
+#                                      (a single commit is a lone ping). A ship's
+#                                      commits are the times its branch's reflog
+#                                      recorded each commit made on it (meta
+#                                      branch=), which survive a later rebase and
+#                                      need no guess at a base ref; a scout's are the
+#                                      committer times of its scratch commits that
+#                                      no branch or remote reaches (or its branch's
+#                                      reflog when it made one). Other kinds, and
+#                                      any task without a worktree, have no commits
+#                                      and stay on the status replay alone.
+#   - project git commit history       NOT used: firstmate's own projects/<name>
+#                                      clones sit on their default branch, so this
+#                                      would see only merged work, not the in-flight
+#                                      branches; the task commit span above covers
+#                                      that work instead.
 # Every window's evidence list survives into the proposal so `approve` is an
 # informed decision, not a rubber stamp of a guess.
 #
@@ -93,6 +133,13 @@
 #                                    recomputed from start/end at report time,
 #                                    never trusted from a stored field.
 #   data/time-tracking/active       present only between `start` and `stop`.
+#   data/time-tracking/evidence/<id>.record
+#                                    one task's evidence captured at teardown:
+#                                    project=, kind=, branch=, status_mtime=,
+#                                    optional commits_first=/commits_last=/
+#                                    commits_count= epochs, and one "status=" line
+#                                    per status-log line. Read by every propose
+#                                    scan, floored by the cursor like any evidence.
 #   data/time-tracking/.lock        transient mkdir-based mutex held only for
 #                                    the span of a single command's own
 #                                    read-modify-write; not part of the durable
@@ -105,11 +152,21 @@
 #   config/time-tracking-workday-end         local HH:MM (default 18:00)
 #   config/time-tracking-weekend-days        comma list, ISO 1-7 (default 6,7)
 #
+# Teardown capture. bin/fm-teardown.sh deletes state/<id>.status and
+# state/<id>.meta, deletes the task branch, and returns the worktree to its pool,
+# so it runs `capture` first, after the landed-work checks pass and the worker is
+# stopped. `capture` writes the evidence record above from the task record, the
+# status log, and the worktree's git history, never changing any of them. A
+# rerun merges: status lines are a union, and commit fields are replaced only by
+# a capture that found commits, so a retry after the branch is gone keeps them.
+# --no-commits skips the git read (teardown passes it when the slot was
+# reassigned to another task). Capture is best effort and never blocks cleanup.
+#
 # Environment:
 #   FM_HOME   operational home whose state/, data/, and config/ are used.
 #
 # Never touches state/.lock, state/.wake-queue, or any other supervision file
-# except to read it; never writes to projects/.
+# except to read it; never writes to projects/ or a task worktree.
 set -euo pipefail
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -119,6 +176,13 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 TT="$DATA/time-tracking"
+
+EVIDENCE_DIR="$TT/evidence"
+
+# bin/fm-classify-lib.sh owns the status-line grammar (verb, [at=] stamp, note);
+# status replay reads lines only through its readers.
+# shellcheck source=bin/fm-classify-lib.sh
+. "$SELF_DIR/fm-classify-lib.sh"
 
 die() { printf 'fm-time: %s\n' "$*" >&2; exit 1; }
 
@@ -367,25 +431,165 @@ write_cursor() {
 
 # ---------------------------------------------------------------- evidence gathering
 
-# Emits TSV lines: epoch<TAB>project<TAB>task<TAB>source<TAB>text
+record_field() {  # <record> <field> -> first value of "<field>=" in a key=value record
+  sed -n "s/^$2=//p" "$1" 2>/dev/null | head -1
+}
+
+evidence_text() {  # <text> -> one tab-free line of at most 140 characters
+  printf '%s' "$1" | tr -d '\t\n' | cut -c1-140
+}
+
+# One evidence TSV line, clipped to the scan floor. An empty <end> is a ping
+# (credited the pad); a non-empty one is an interval credited as measured.
+emit_evidence() {  # <since> <out> <project> <task> <source> <start> <end> <text>
+  local since=$1 out=$2 project=$3 task=$4 source=$5 start=$6 end=$7 text=$8
+  if [ -z "$end" ]; then
+    [ "$start" -gt "$since" ] || return 0
+  else
+    [ "$end" -gt "$since" ] || return 0
+    [ "$start" -gt "$since" ] || start=$since
+  fi
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$start" "$project" "$task" "$source" "$text" "$end" >> "$out"
+}
+
+# An active span from <start> to <end>; a zero-length one is a lone ping.
+emit_active() {  # <since> <out> <project> <task> <start> <end> <text>
+  if [ "$6" -gt "$5" ]; then
+    emit_evidence "$1" "$2" "$3" "$4" status "$5" "$6" "$7"
+  else
+    emit_evidence "$1" "$2" "$3" "$4" status "$5" "" "$7"
+  fi
+}
+
+# Status replay (header lever 1) plus the teardown-captured commit span (lever
+# 2) for one task. <live> is state/<id>.status when it still exists; <record> is
+# data/time-tracking/evidence/<id>.record when teardown captured one. Lines
+# present in both are replayed once.
+replay_task_evidence() {  # <since> <out> <task> <project> <live-or-empty> <record-or-empty>
+  local since=$1 out=$2 id=$3 project=$4 live=$5 record=$6
+  local lines line epoch verb note events="" n=0 idx=0 mtime text
+
+  lines=$( {
+    [ -z "$live" ] || cat "$live" 2>/dev/null || true
+    [ -z "$record" ] || sed -n 's/^status=//p' "$record" 2>/dev/null || true
+  } | awk 'NF && !seen[$0]++')
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    idx=$((idx + 1))
+    epoch=$(status_line_at_epoch "$line") || continue
+    status_line_verb "$line" verb
+    note=$(status_line_note "$line")
+    events="$events$epoch"$'\t'"$idx"$'\t'"$verb"$'\t'"$(evidence_text "$verb: $note")"$'\n'
+    n=$((n + 1))
+  done <<< "$lines"
+
+  if [ "$n" -lt 2 ]; then
+    # Too few stamped events to replay: the lone last-touch ping, credited the pad.
+    if [ -n "$live" ]; then
+      mtime=$(fm_time_mtime "$live") || mtime=
+      text=$(tail -1 "$live" 2>/dev/null | tr -d '\t' | cut -c1-140)
+    else
+      mtime=$(record_field "$record" status_mtime)
+      text=$(evidence_text "$(sed -n 's/^status=//p' "$record" 2>/dev/null | tail -1)")
+    fi
+    case "$mtime" in
+      ''|*[!0-9]*) ;;
+      *) [ "$mtime" -le "$since" ] || printf '%s\t%s\t%s\tstatus\t%s\n' "$mtime" "$project" "$id" "$text" >> "$out" ;;
+    esac
+  else
+    local state=idle seg_start=0 seg_last=0 seg_text="" wait_start=0 wait_text=""
+    while IFS=$'\t' read -r epoch _ verb text; do
+      [ -n "$epoch" ] || continue
+      case "$verb" in
+        working|resolved)
+          case "$state" in
+            active) seg_last=$epoch; continue ;;
+            wait) emit_evidence "$since" "$out" "$project" "$id" status-wait "$wait_start" "$epoch" "$wait_text" ;;
+          esac
+          state=active; seg_start=$epoch; seg_last=$epoch; seg_text=$text
+          ;;
+        paused|blocked|needs-decision)
+          case "$state" in
+            wait) continue ;;
+            active) emit_active "$since" "$out" "$project" "$id" "$seg_start" "$epoch" "$seg_text" ;;
+          esac
+          state="wait"; wait_start=$epoch; wait_text=$text
+          ;;
+        done|failed)
+          case "$state" in
+            active) emit_active "$since" "$out" "$project" "$id" "$seg_start" "$epoch" "$text" ;;
+            wait) emit_evidence "$since" "$out" "$project" "$id" status-wait "$wait_start" "$epoch" "$wait_text" ;;
+            *) emit_evidence "$since" "$out" "$project" "$id" status "$epoch" "" "$text" ;;
+          esac
+          state=idle
+          ;;
+      esac
+    done < <(printf '%s' "$events" | sort -t $'\t' -k1,1n -k2,2n)
+    # Work still under way at the last report is credited the pad past it, as a
+    # lone ping would be. A wait still open has no end yet, so it carves nothing.
+    if [ "$state" = active ]; then
+      if [ "$seg_last" -gt "$seg_start" ]; then
+        emit_evidence "$since" "$out" "$project" "$id" status "$seg_start" "$((seg_last + PAD_MINUTES * 60))" "$seg_text"
+      else
+        emit_evidence "$since" "$out" "$project" "$id" status "$seg_start" "" "$seg_text"
+      fi
+    fi
+  fi
+
+  [ -n "$record" ] || return 0
+  local first last count branch
+  first=$(record_field "$record" commits_first)
+  last=$(record_field "$record" commits_last)
+  count=$(record_field "$record" commits_count)
+  branch=$(record_field "$record" branch)
+  case "$first:$last" in
+    *[!0-9:]*|:*|*:) return 0 ;;
+  esac
+  text=$(evidence_text "${count:-?} commit(s) on ${branch:-its worktree}")
+  if [ "$last" -gt "$first" ]; then
+    emit_evidence "$since" "$out" "$project" "$id" commits "$first" "$last" "$text"
+  else
+    emit_evidence "$since" "$out" "$project" "$id" commits "$first" "" "$text"
+  fi
+}
+
+# Emits TSV lines: epoch<TAB>project<TAB>task<TAB>source<TAB>text[<TAB>end]
+# A sixth end field marks an interval (source status or commits) or, for source
+# status-wait, a declared wait that cluster_evidence carves out of the task's
+# credited time; lines without it are pings.
 gather_evidence() {  # <since-epoch> <out-file>
   local since=$1 out=$2 f id mtime meta project text line kind key payload epoch
 
   : > "$out"
 
+  local record
+  local -A replayed=()
   for f in "$STATE"/*.status; do
     [ -e "$f" ] || break
     id=$(basename "$f" .status)
-    mtime=$(fm_time_mtime "$f") || continue
-    [ -n "$mtime" ] && [ "$mtime" -gt "$since" ] || continue
     project=-
     meta="$STATE/$id.meta"
     if [ -r "$meta" ]; then
       project=$(sed -n 's/^project=//p' "$meta" | head -1)
       [ -n "$project" ] && project=$(basename "$project") || project=-
     fi
-    text=$(tail -1 "$f" 2>/dev/null | tr -d '\t' | cut -c1-140)
-    printf '%s\t%s\t%s\tstatus\t%s\n' "$mtime" "$project" "$id" "$text" >> "$out"
+    record="$EVIDENCE_DIR/$id.record"
+    [ -r "$record" ] || record=
+    if [ "$project" = - ] && [ -n "$record" ]; then
+      project=$(record_field "$record" project)
+      [ -n "$project" ] || project=-
+    fi
+    replay_task_evidence "$since" "$out" "$id" "$project" "$f" "$record"
+    replayed[$id]=1
+  done
+
+  for record in "$EVIDENCE_DIR"/*.record; do
+    [ -e "$record" ] || break
+    id=$(basename "$record" .record)
+    [ -z "${replayed[$id]:-}" ] || continue
+    project=$(record_field "$record" project)
+    [ -n "$project" ] || project=-
+    replay_task_evidence "$since" "$out" "$id" "$project" "" "$record"
   done
 
   for f in "$STATE"/*.meta; do
@@ -468,47 +672,120 @@ gather_evidence() {  # <since-epoch> <out-file>
 
 # ---------------------------------------------------------------- clustering
 
-# Reads evidence TSV on stdin (any order), writes proposal blocks to stdout in
-# the "## pN" key=value shape described in the header.
+# Reads the evidence TSV file (any order) and writes proposal blocks to stdout
+# in the "## pN" key=value shape described in the header. Per (project, task):
+# declared waits (source status-wait) are carved out first - a ping inside one
+# is absorbed, an interval is cut around it, and a pad never runs into one -
+# then the surviving pings and interval pieces merge into windows across gaps
+# up to the gap setting, but never across a declared wait.
 cluster_evidence() {
   sort -t $'\t' -k2,2 -k3,3 -k1,1n "$1" | awk -F'\t' -v gap=$((GAP_MINUTES * 60)) -v pad=$((PAD_MINUTES * 60)) '
-    function flush(n) {
-      if (n == 0) return
-      pid++
-      printf "## p%d\n", pid
-      printf "start=%s\n", start_disp
-      printf "end=%s\n", end_disp
-      printf "project=%s\n", cur_project
-      printf "task=%s\n", cur_task
-      printf "desc=%s\n", last_text
-      for (i = 1; i <= n; i++) printf "evidence=%s\n", ev[i]
-      printf "\n"
-    }
-    BEGIN { pid = 0; n = 0 }
-    {
-      epoch = $1; project = $2; task = $3; source = $4; text = $5
-      key = project SUBSEP task
-      if (n > 0 && (key != cur_key || (epoch - last_epoch) > gap)) {
-        flush(n)
-        n = 0
-      }
-      if (n == 0) {
-        cur_key = key; cur_project = project; cur_task = task
-        first_epoch = epoch
-        cmd = "date -r " epoch " \"+%Y-%m-%d %H:%M\" 2>/dev/null || date -d @" epoch " \"+%Y-%m-%d %H:%M\""
-        cmd | getline start_disp
-        close(cmd)
-      }
-      last_epoch = epoch
-      last_text = text
-      n++
-      ev[n] = epoch " | " source " | " text
-      end_epoch = epoch + pad
-      cmd = "date -r " end_epoch " \"+%Y-%m-%d %H:%M\" 2>/dev/null || date -d @" end_epoch " \"+%Y-%m-%d %H:%M\""
-      cmd | getline end_disp
+    function fmt(ep,   cmd, disp) {
+      cmd = "date -r " ep " \"+%Y-%m-%d %H:%M\" 2>/dev/null || date -d @" ep " \"+%Y-%m-%d %H:%M\""
+      cmd | getline disp
       close(cmd)
+      return disp
     }
-    END { flush(n) }
+    function add_piece(st, cov, cred, item) {
+      np++
+      pst[np] = st; pcov[np] = cov; pcred[np] = cred; pitem[np] = item
+      pfirst[np] = !(item in placed)
+      placed[item] = 1
+    }
+    function process(   i, w, k, nseg, nnew, s, cred, inside, p, q, t, win, target, blocked, line) {
+      np = 0
+      split("", placed); split("", ord)
+      for (i = 1; i <= ni; i++) {
+        s = is[i] + 0
+        if (ie[i] == "") {
+          inside = 0
+          for (w = 1; w <= nw; w++) if (ws[w] <= s && s < we[w]) inside = 1
+          if (inside) continue
+          cred = s + pad
+          for (w = 1; w <= nw; w++) if (ws[w] > s && ws[w] < cred) cred = ws[w]
+          add_piece(s, s, cred, i)
+          continue
+        }
+        split("", sa); split("", sb)
+        nseg = 1; sa[1] = s; sb[1] = ie[i] + 0
+        for (w = 1; w <= nw; w++) {
+          split("", na); split("", nb); nnew = 0
+          for (k = 1; k <= nseg; k++) {
+            if (ws[w] < sb[k] && we[w] > sa[k]) {
+              if (ws[w] > sa[k]) { nnew++; na[nnew] = sa[k]; nb[nnew] = ws[w] }
+              if (we[w] < sb[k]) { nnew++; na[nnew] = we[w]; nb[nnew] = sb[k] }
+            } else {
+              nnew++; na[nnew] = sa[k]; nb[nnew] = sb[k]
+            }
+          }
+          split("", sa); split("", sb)
+          for (k = 1; k <= nnew; k++) { sa[k] = na[k]; sb[k] = nb[k] }
+          nseg = nnew
+        }
+        for (k = 1; k <= nseg; k++) if (sb[k] > sa[k]) add_piece(sa[k], sb[k], sb[k], i)
+      }
+      for (p = 1; p <= np; p++) ord[p] = p
+      for (p = 2; p <= np; p++) {
+        t = ord[p]
+        for (q = p - 1; q >= 1 && pst[ord[q]] > pst[t]; q--) ord[q + 1] = ord[q]
+        ord[q + 1] = t
+      }
+      nwin = 0
+      for (q = 1; q <= np; q++) {
+        p = ord[q]
+        blocked = 0
+        if (nwin > 0) {
+          if (pst[p] - wcov[nwin] > gap) blocked = 1
+          for (w = 1; w <= nw && !blocked; w++) if (ws[w] < pst[p] && we[w] > wcov[nwin]) blocked = 1
+        }
+        if (nwin == 0 || blocked) {
+          nwin++
+          wstart[nwin] = pst[p]; wcov[nwin] = pcov[p]; wcred[nwin] = pcred[p]; wn[nwin] = 0
+        } else {
+          if (pcov[p] > wcov[nwin]) wcov[nwin] = pcov[p]
+          if (pcred[p] > wcred[nwin]) wcred[nwin] = pcred[p]
+        }
+        i = pitem[p]
+        wdesc[nwin] = it[i]
+        if (pfirst[p]) {
+          line = is[i] " | " isrc[i] " | " it[i]
+          if (ie[i] != "") line = line " (until " fmt(ie[i]) ")"
+          wn[nwin]++; wev[nwin, wn[nwin]] = line
+        }
+      }
+      for (w = 1; w <= nw; w++) {
+        target = 0
+        for (win = 1; win <= nwin; win++) if (wstart[win] <= ws[w]) target = win
+        if (target == 0 && nwin > 0) target = 1
+        if (target == 0) continue
+        wn[target]++
+        wev[target, wn[target]] = ws[w] " | status-wait | " wt[w] " (declared wait until " fmt(we[w]) ", not credited)"
+      }
+      for (win = 1; win <= nwin; win++) {
+        pid++
+        printf "## p%d\n", pid
+        printf "start=%s\n", fmt(wstart[win])
+        printf "end=%s\n", fmt(wcred[win])
+        printf "project=%s\n", cur_project
+        printf "task=%s\n", cur_task
+        printf "desc=%s\n", wdesc[win]
+        for (k = 1; k <= wn[win]; k++) printf "evidence=%s\n", wev[win, k]
+        printf "\n"
+      }
+      ni = 0; nw = 0
+    }
+    BEGIN { pid = 0; ni = 0; nw = 0; cur_key = "" }
+    {
+      key = $2 SUBSEP $3
+      if ((ni > 0 || nw > 0) && key != cur_key) process()
+      cur_key = key; cur_project = $2; cur_task = $3
+      if ($4 == "status-wait" && $6 != "") {
+        nw++; ws[nw] = $1 + 0; we[nw] = $6 + 0; wt[nw] = $5
+      } else {
+        ni++; is[ni] = $1; ie[ni] = $6; isrc[ni] = $4; it[ni] = $5
+      }
+    }
+    END { if (ni > 0 || nw > 0) process() }
   '
 }
 
@@ -953,6 +1230,100 @@ cmd_report() {
   done
 }
 
+# ---------------------------------------------------------------- capture
+
+# Local commit moments on <branch>: the times its reflog recorded each commit
+# made on it, which survive a later rebase and need no guess at a base ref.
+branch_commit_epochs() {  # <worktree> <branch>
+  git -C "$1" reflog show --date=unix --format='%gd%x09%gs' "refs/heads/$2" -- 2>/dev/null \
+    | awk -F'\t' '$2 ~ /^commit/ { e = $1; sub(/.*@\{/, "", e); sub(/\}.*/, "", e); if (e ~ /^[0-9]+$/) print e }' \
+    || true
+}
+
+cmd_capture() {
+  local id=${1:-} commits=1
+  [ -n "$id" ] || die "capture: a task id is required"
+  shift
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --no-commits) commits=0; shift ;;
+      *) die "capture: unknown argument: $1" ;;
+    esac
+  done
+  case "$id" in */*|.*|'') die "capture: invalid task id: $id" ;; esac
+
+  local meta="$STATE/$id.meta" live="$STATE/$id.status" record="$EVIDENCE_DIR/$id.record"
+  local project="" kind="" branch="" worktree="" status_mtime="" old=""
+  if [ -r "$meta" ]; then
+    project=$(record_field "$meta" project)
+    [ -z "$project" ] || project=$(basename "$project")
+    kind=$(record_field "$meta" kind)
+    branch=$(record_field "$meta" branch)
+    worktree=$(record_field "$meta" worktree)
+  fi
+  [ -r "$record" ] && old=$record
+  if [ -n "$old" ]; then
+    [ -n "$project" ] || project=$(record_field "$old" project)
+    [ -n "$kind" ] || kind=$(record_field "$old" kind)
+    [ -n "$branch" ] || branch=$(record_field "$old" branch)
+  fi
+  if [ -e "$live" ]; then
+    status_mtime=$(fm_time_mtime "$live") || status_mtime=
+  fi
+  [ -n "$status_mtime" ] || [ -z "$old" ] || status_mtime=$(record_field "$old" status_mtime)
+
+  # Commit evidence exists only where a task worktree does: ship and scout.
+  local epochs=""
+  if [ "$commits" -eq 1 ] && [ -n "$worktree" ] && [ -d "$worktree" ]; then
+    case "$kind" in
+      ship)
+        [ -n "$branch" ] || branch=$(git -C "$worktree" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+        [ -z "$branch" ] || epochs=$(branch_commit_epochs "$worktree" "$branch")
+        ;;
+      scout)
+        # Scouts never push and usually commit on a detached HEAD: their own
+        # scratch commits are the ones no branch or remote reaches.
+        branch=$(git -C "$worktree" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+        if [ -n "$branch" ]; then
+          epochs=$(branch_commit_epochs "$worktree" "$branch")
+        else
+          epochs=$(git -C "$worktree" log --format=%ct HEAD --not --branches --remotes -- 2>/dev/null || true)
+        fi
+        ;;
+    esac
+  fi
+  local first="" last="" count=0
+  if [ -n "$epochs" ]; then
+    first=$(printf '%s\n' "$epochs" | sort -n | head -1)
+    last=$(printf '%s\n' "$epochs" | sort -n | tail -1)
+    count=$(printf '%s\n' "$epochs" | grep -c .)
+  elif [ -n "$old" ]; then
+    # A rerun after the branch or slot is gone keeps the earlier capture.
+    first=$(record_field "$old" commits_first)
+    last=$(record_field "$old" commits_last)
+    count=$(record_field "$old" commits_count)
+  fi
+
+  mkdir -p "$EVIDENCE_DIR"
+  {
+    printf '# fm-time.sh evidence record for %s, captured at teardown\n' "$id"
+    printf 'project=%s\n' "$project"
+    printf 'kind=%s\n' "$kind"
+    printf 'branch=%s\n' "$branch"
+    printf 'status_mtime=%s\n' "$status_mtime"
+    if [ -n "$first" ] && [ -n "$last" ]; then
+      printf 'commits_first=%s\n' "$first"
+      printf 'commits_last=%s\n' "$last"
+      printf 'commits_count=%s\n' "$count"
+    fi
+    {
+      [ -z "$old" ] || sed -n 's/^status=//p' "$old"
+      [ ! -r "$live" ] || cat "$live"
+    } | awk 'NF && !seen[$0]++ { print "status=" $0 }'
+  } > "$record.tmp.$$"
+  mv "$record.tmp.$$" "$record"
+}
+
 # ---------------------------------------------------------------- dispatch
 
 case "${1:-}" in
@@ -965,6 +1336,7 @@ case "${1:-}" in
   stop)    shift; cmd_stop "$@" ;;
   log)     shift; cmd_log "$@" ;;
   report)  shift; cmd_report "$@" ;;
+  capture) shift; cmd_capture "$@" ;;
   ''|-h|--help|help) usage ;;
   *) die "unknown subcommand: $1 (try --help)" ;;
 esac

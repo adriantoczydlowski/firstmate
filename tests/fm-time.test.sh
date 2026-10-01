@@ -24,6 +24,18 @@ touch_at() {
   touch -t "$stamp" "$path"
 }
 
+# local_epoch <YYYY-MM-DD HH:MM>: local wall clock -> epoch seconds.
+local_epoch() {
+  date -j -f '%Y-%m-%d %H:%M' "$1" '+%s' 2>/dev/null || date -d "$1" '+%s'
+}
+
+# commit_at <worktree> <epoch> <message>: an empty commit whose committer time,
+# and so its reflog entry, is <epoch>.
+commit_at() {
+  GIT_COMMITTER_DATE="$2 +0000" GIT_AUTHOR_DATE="$2 +0000" \
+    git -C "$1" -c user.email=t@t -c user.name=t commit -q --allow-empty -m "$3"
+}
+
 # ---------------------------------------------------------------- propose
 
 test_propose_clusters_synthetic_status_and_meta_evidence() {
@@ -507,6 +519,164 @@ EOF
   pass "propose/approve/report only read state/.lock and state/.wake-queue, never write them"
 }
 
+
+# ---------------------------------------------------------------- status replay and commit spans
+
+test_single_stamped_status_line_keeps_the_pad_fallback() {
+  local home t0 out list
+  home=$(make_home replay-single)
+  t0=$(local_epoch "2026-09-07 10:00")
+  printf 'done [at=%s]: fixed the widget\n' "$t0" > "$home/state/solo.status"
+  touch_at "$home/state/solo.status" 2026-09-07 14:00
+
+  out=$(FM_HOME="$home" "$FMTIME" propose --since "2026-09-01 00:00") \
+    || fail "propose failed on a one-line status log"
+  assert_contains "$out" "1 proposed window" "a one-line status log did not yield exactly one window"
+  list=$(FM_HOME="$home" "$FMTIME" list)
+  assert_contains "$list" "start    2026-09-07 14:00" "a one-line status log no longer pings at its mtime"
+  assert_contains "$list" "end      2026-09-07 14:15" "a one-line status log no longer credits the flat pad"
+
+  pass "a status log with one stamped line keeps the last-touch ping and flat pad"
+}
+
+test_status_replay_credits_active_intervals_and_excludes_a_paused_span() {
+  local home t0 out list report
+  home=$(make_home replay-paused)
+  t0=$(local_epoch "2026-09-07 10:00")
+  cat > "$home/state/demo-task.status" <<EOF
+working [at=$t0]: setup done
+paused [at=$((t0 + 1800))]: waiting on the validation run
+resolved [at=$((t0 + 3000))]: validation returned a finding
+done [at=$((t0 + 5400))]: PR checks green
+EOF
+  printf 'project=%s/projects/FnO\nkind=ship\n' "$home" > "$home/state/demo-task.meta"
+  touch_at "$home/state/demo-task.meta" 2026-09-07 10:00
+  # A firstmate-side record touch inside the declared wait is not work.
+  mkdir -p "$home/data/demo-task"
+  printf 'report\n' > "$home/data/demo-task/report.md"
+  touch_at "$home/data/demo-task/report.md" 2026-09-07 10:40
+
+  out=$(FM_HOME="$home" "$FMTIME" propose --since "2026-09-01 00:00") \
+    || fail "propose failed on a multi-transition status log"
+  assert_contains "$out" "2 proposed window" "a 20-minute declared pause did not split the work into two windows"
+  list=$(FM_HOME="$home" "$FMTIME" list)
+  assert_contains "$list" "start    2026-09-07 10:00" "first active interval does not start at the working line"
+  assert_contains "$list" "end      2026-09-07 10:30" "first active interval does not end at the paused line"
+  assert_contains "$list" "start    2026-09-07 10:50" "second active interval does not start at the resolved line"
+  assert_contains "$list" "end      2026-09-07 11:30" "second active interval does not end at the done line, unpadded"
+  assert_contains "$list" "not credited" "the declared wait is not listed as uncredited evidence"
+  assert_not_contains "$list" "scout report finalized" "a ping inside the declared wait was credited"
+
+  FM_HOME="$home" "$FMTIME" approve p1 >/dev/null || fail "approve p1 failed"
+  FM_HOME="$home" "$FMTIME" approve p2 >/dev/null || fail "approve p2 failed"
+  report=$(FM_HOME="$home" "$FMTIME" report --month 2026-09) || fail "report failed"
+  assert_contains "$report" "total: 1h10m" "replayed work did not total the 70 active minutes, excluding the 20-minute pause"
+
+  pass "status replay credits measured active intervals and excludes a declared paused span"
+}
+
+test_teardown_capture_records_a_ship_branch_commit_span() {
+  local home repo wt t0 record out list
+  home=$(make_home capture-ship)
+  repo="$home/project"
+  wt="$home/wt"
+  t0=$(local_epoch "2026-09-08 09:00")
+  git init -q -b main "$repo"
+  commit_at "$repo" "$((t0 - 86400))" "baseline"
+  git -C "$repo" worktree add -q -b fm/ship-x "$wt" main
+  commit_at "$wt" "$((t0 + 600))" "first"
+  commit_at "$wt" "$((t0 + 2400))" "second"
+  commit_at "$wt" "$((t0 + 4200))" "third"
+  cat > "$home/state/ship-x.meta" <<EOF
+project=$repo
+kind=ship
+branch=fm/ship-x
+worktree=$wt
+EOF
+  printf 'done [at=%s]: ready on branch\n' "$((t0 + 4500))" > "$home/state/ship-x.status"
+  touch_at "$home/state/ship-x.status" 2026-09-08 10:15
+
+  FM_HOME="$home" "$FMTIME" capture ship-x || fail "capture failed on a ship worktree"
+  record="$home/data/time-tracking/evidence/ship-x.record"
+  assert_present "$record" "capture wrote no evidence record"
+  assert_grep "commits_first=$((t0 + 600))" "$record" "commit span does not start at the first branch commit"
+  assert_grep "commits_last=$((t0 + 4200))" "$record" "commit span does not end at the last branch commit"
+  assert_grep 'commits_count=3' "$record" "commit span did not count the three branch commits (or counted the baseline)"
+  assert_grep 'status=done [at=' "$record" "status log line was not captured"
+
+  # Teardown then deletes the branch, the status log, and the task record; a
+  # rerun after that keeps the earlier commit span.
+  git -C "$wt" checkout -q --detach
+  git -C "$wt" branch -q -D fm/ship-x
+  FM_HOME="$home" "$FMTIME" capture ship-x || fail "capture rerun failed after the branch was deleted"
+  assert_grep 'commits_count=3' "$record" "a capture rerun after branch deletion dropped the commit span"
+  rm -f "$home/state/ship-x.status" "$home/state/ship-x.meta"
+
+  out=$(FM_HOME="$home" "$FMTIME" propose --since "2026-09-01 00:00") \
+    || fail "propose failed on a captured evidence record"
+  assert_contains "$out" "1 proposed window" "commit span and done ping did not merge into one window"
+  list=$(FM_HOME="$home" "$FMTIME" list)
+  assert_contains "$list" "start    2026-09-08 09:10" "window does not start at the first commit"
+  assert_contains "$list" "end      2026-09-08 10:30" "window does not end at the padded done ping after the last commit"
+  assert_contains "$list" "project  project" "project attribution was not kept in the evidence record"
+  assert_contains "$list" "3 commit(s) on fm/ship-x" "commit-span evidence is not listed"
+
+  pass "teardown capture records a ship branch's first-to-last commit span, and propose credits it after cleanup"
+}
+
+test_teardown_capture_records_scout_scratch_commits_only() {
+  local home repo wt t0 record
+  home=$(make_home capture-scout)
+  repo="$home/project"
+  wt="$home/wt"
+  t0=$(local_epoch "2026-09-09 13:00")
+  git init -q -b main "$repo"
+  commit_at "$repo" "$((t0 - 86400))" "baseline"
+  git -C "$repo" worktree add -q --detach "$wt" main
+  commit_at "$wt" "$t0" "scratch one"
+  commit_at "$wt" "$((t0 + 1500))" "scratch two"
+  printf 'project=%s\nkind=scout\nworktree=%s\n' "$repo" "$wt" > "$home/state/scout-y.meta"
+
+  FM_HOME="$home" "$FMTIME" capture scout-y || fail "capture failed on a scout worktree"
+  record="$home/data/time-tracking/evidence/scout-y.record"
+  assert_grep "commits_first=$t0" "$record" "scout span does not start at its first scratch commit"
+  assert_grep "commits_last=$((t0 + 1500))" "$record" "scout span does not end at its last scratch commit"
+  assert_grep 'commits_count=2' "$record" "scout span counted commits a branch already reaches"
+
+  pass "teardown capture records a scout's unpushed scratch commits as its span"
+}
+
+test_captured_status_log_is_replayed_once_after_teardown() {
+  local home t0 out list
+  home=$(make_home replay-record)
+  t0=$(local_epoch "2026-09-10 15:00")
+  cat > "$home/state/gone.status" <<EOF
+working [at=$t0]: investigating
+done [at=$((t0 + 2700))]: report written
+EOF
+  printf 'project=%s/projects/FnO\nkind=task\n' "$home" > "$home/state/gone.meta"
+  touch_at "$home/state/gone.meta" 2026-09-10 15:00
+  FM_HOME="$home" "$FMTIME" capture gone || fail "capture failed on a task without a worktree"
+  assert_no_grep 'commits_' "$home/data/time-tracking/evidence/gone.record" \
+    "a task without a worktree gained commit evidence"
+
+  # Before cleanup both copies exist; they must count once.
+  out=$(FM_HOME="$home" "$FMTIME" propose --since "2026-09-01 00:00")
+  assert_contains "$out" "1 proposed window" "live status log and its captured copy were not deduplicated"
+  list=$(FM_HOME="$home" "$FMTIME" list)
+  assert_contains "$list" "end      2026-09-10 15:45" "deduplicated replay did not end at the done line"
+
+  rm -f "$home/state/gone.status" "$home/state/gone.meta"
+  out=$(FM_HOME="$home" "$FMTIME" propose --since "2026-09-01 00:00" --replace)
+  assert_contains "$out" "1 proposed window" "the captured status log was not replayed after cleanup"
+  list=$(FM_HOME="$home" "$FMTIME" list)
+  assert_contains "$list" "start    2026-09-10 15:00" "captured replay lost the working line"
+  assert_contains "$list" "end      2026-09-10 15:45" "captured replay lost the done line"
+  assert_contains "$list" "project  FnO" "captured replay lost the project attribution"
+
+  pass "a captured status log replays after cleanup, and once while both copies exist"
+}
+
 test_propose_clusters_synthetic_status_and_meta_evidence
 test_propose_wide_gap_produces_two_windows
 test_propose_refuses_second_batch_without_replace
@@ -527,3 +697,8 @@ test_lock_reclaimed_when_owner_pid_was_reused
 test_report_groups_by_month_and_splits_after_hours
 test_report_month_boundary_uses_entry_start_date
 test_time_tracking_never_writes_supervision_state
+test_single_stamped_status_line_keeps_the_pad_fallback
+test_status_replay_credits_active_intervals_and_excludes_a_paused_span
+test_teardown_capture_records_a_ship_branch_commit_span
+test_teardown_capture_records_scout_scratch_commits_only
+test_captured_status_log_is_replayed_once_after_teardown
