@@ -608,7 +608,26 @@ test_relaunch_appends_the_progress_note_to_the_instructions() {
     "the Firstmate-worktree relaunch omitted the worker's exact steering inbox"
   assert_grep 'do not reject it as another home' "$launch_brief" \
     "the Firstmate-worktree relaunch did not distinguish its inbox from cross-home state"
+  assert_grep "Your progress log is \`$dir/home/data/rl2/progress.md\`" "$launch_brief" \
+    "the relaunched worker role did not name the task's progress log"
+  assert_no_grep "Then read $dir/home/data/rl2/progress.md" "$brief" \
+    "the progress note pointed at a progress log the worker never kept"
   pass "fm-control relaunch: progress and the Firstmate-worktree worker identity reach the replacement"
+}
+
+test_relaunch_note_points_at_a_kept_progress_log() {
+  local dir out rc brief
+  dir=$(new_case progresslog rl2p)
+  add_ship_task "$dir" rl2p claude
+  printf '%s\n' '## Next steps' '- rerun the parser fixture' > "$dir/home/data/rl2p/progress.md"
+  out=$(run_control "$dir" rl2p relaunch --note "worker stopped responding"); rc=$?
+  expect_code 0 "$rc" "relaunch should succeed"$'\n'"$out"
+  brief="$dir/home/data/rl2p/brief.md"
+  assert_grep "Then read $dir/home/data/rl2p/progress.md" "$brief" \
+    "the progress note did not point the replacement at the kept progress log"
+  assert_grep "worker stopped responding" "$brief" "the why-relaunched note did not reach the replacement"
+  assert_grep "rerun the parser fixture" "$dir/home/data/rl2p/progress.md" "relaunch rewrote the worker's progress log"
+  pass "fm-control relaunch: the progress note points the replacement at a kept progress log"
 }
 
 test_relaunch_requires_a_note_for_a_ship_task() {
@@ -2394,6 +2413,7 @@ test_relaunch_preserves_durable_task_metadata
 test_relaunch_serializes_concurrent_durable_metadata_publication
 test_disabled_relaunch_clears_prior_trace_context
 test_relaunch_appends_the_progress_note_to_the_instructions
+test_relaunch_note_points_at_a_kept_progress_log
 test_relaunch_requires_a_note_for_a_ship_task
 test_harness_switch_moves_the_record_and_clears_prior_wiring
 test_harness_switch_does_not_carry_the_old_profile_axes

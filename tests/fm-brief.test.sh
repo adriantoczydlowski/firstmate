@@ -1047,6 +1047,28 @@ test_worker_role_scope() {
   pass "fm-brief: scaffolds leave the worker role scope to the launch boundary and keep the secondmate contract"
 }
 
+test_progress_log_rule() {
+  local kind home brief
+  home="$TMP_ROOT/progress-log"
+  for kind in no-mistakes direct-PR local-only scout; do
+    if [ "$kind" = scout ]; then
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$kind" arbitrary-project-name --scout >/dev/null || fail "scout scaffold failed"
+    else
+      FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$kind" arbitrary-project-name --mode "$kind" >/dev/null || fail "$kind scaffold failed"
+    fi
+    brief="$home/data/$kind/brief.md"
+    [ "$(sed -n '/^# Rules$/,/^3\. /p' "$brief" | grep -c "$home/data/$kind/progress.md")" = 1 ] \
+      || fail "$kind rule 2 did not name the task's own progress log"
+    assert_grep "Writing it wakes no one" "$brief" "$kind progress log was not marked as outside the status protocol"
+    sed -n '/^# Definition of done$/,$p' "$brief" | grep -q 'If you keep a progress log (rule 2)' \
+      || fail "$kind definition of done did not point at the progress-log gate"
+  done
+  FM_HOME="$home" FM_SECONDMATE_CHARTER='Supervise assigned work.' \
+    "$ROOT/bin/fm-brief.sh" supervisor --secondmate --no-projects >/dev/null || fail "secondmate scaffold failed"
+  assert_no_grep 'progress log' "$home/data/supervisor/brief.md" "secondmate charter received the worker progress log"
+  pass "fm-brief: ship and scout rule 2 permit the task's own progress log and the definition of done points at its gate"
+}
+
 # A home can carry standing worker instructions in its gitignored
 # config/brief-include.md. The include must land last on ship and scout
 # scaffolds, stay out of charters, change nothing when absent or blank, and stop
@@ -1259,6 +1281,7 @@ test_branch_prefix_command_is_shell_safe() {
 }
 
 test_worker_role_scope
+test_progress_log_rule
 
 # Rule 2 governs file edits rather than pool administration, so every crewmate
 # scaffold must prohibit the administrative act itself. The rule is emitted from

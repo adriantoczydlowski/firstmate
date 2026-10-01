@@ -77,9 +77,11 @@
 #              that no longer resolves or is signed out refuses before the old
 #              agent stops.
 #              --note is required for a ship or scout, whose replacement
-#              inherits the local copy but none of the conversation; a
-#              secondmate reconciles its own home's records at startup, so its
-#              standing charter is never rewritten.
+#              inherits the local copy but none of the conversation; when the
+#              worker kept data/<id>/progress.md, the recorded note also
+#              points the replacement at it; a secondmate reconciles its own
+#              home's records at startup, so its standing charter is never
+#              rewritten.
 #              Records a durable checkpoint and that note, exits the old agent,
 #              then delegates the launch to its single owner,
 #              bin/fm-spawn.sh --relaunch. A failure before publication keeps
@@ -931,7 +933,9 @@ safe_checkpoint() {
 # conversation about to be discarded - into the instructions the replacement
 # actually reads. A secondmate's charter is a durable standing document and is
 # never rewritten: a secondmate reconciles its own home's records at startup,
-# so the note stays parent-side audit evidence.
+# so the note stays parent-side audit evidence. When the worker kept a progress
+# log (data/<id>/progress.md, brief rule 2), the note points the replacement at
+# it, so the supervisor's note need only say why the task was relaunched.
 record_note() {
   local stamp
   [ -n "$NOTE" ] || return 0
@@ -951,6 +955,11 @@ record_note() {
         echo "First, check your instruction inbox: list $STATE/$ID.inbox/*.msg, act on"
         echo "each message in numeric order, then mv each handled file into"
         echo "$STATE/$ID.inbox/handled/. A steer sent before the relaunch survives there."
+        if [ -f "$DATA/$ID/progress.md" ]; then
+          echo
+          echo "Then read $DATA/$ID/progress.md: the previous worker's plan, decisions,"
+          echo "what is done, and next steps. Continue from it and keep it current."
+        fi
         echo
         printf '%s\n' "$NOTE"
       } >> "$RELAUNCH_BRIEF" \

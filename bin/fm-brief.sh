@@ -108,6 +108,10 @@
 # Scaffolds carry no role scope: fm-spawn.sh supplies fm_brief_worker_role from
 # fm-dod-lib.sh to every ship/scout launch brief, so this file never becomes a
 # second owner of a contract that must stay current across relaunches.
+# Ship and scout rule 2 both permit one shared worker-kept progress log,
+# data/<task-id>/progress.md, and own what it holds and when it is updated;
+# the role contract owns reading it on relaunch and having it current before a
+# done/blocked/paused line. It is never a wake source.
 # A home may carry standing worker instructions without editing this tracked
 # script: when config/brief-include.md exists under the active home, ship and
 # scout scaffolds append its text verbatim as their last section, "# Home brief
@@ -366,6 +370,14 @@ The move IS the acknowledgement: without it firstmate rings again and eventually
 EOF
 INBOX_SECTION=${INBOX_SECTION%$'\n'}
 
+# Rule 2's progress-log permission, shared by the ship and scout scaffolds.
+IFS= read -r -d '' PROGRESS_LOG_RULE <<EOF || true
+   You may keep a progress log at \`$DATA/$ID/progress.md\`: the current plan, the decisions you took and why, what is done, and the exact next steps, so a replacement worker can continue without your conversation.
+   Update it at each phase change - the same moments that earn a \`working:\` line.
+   Writing it wakes no one, and it never replaces a status line: rule 4's status protocol stays exactly as sparse.
+EOF
+PROGRESS_LOG_RULE=${PROGRESS_LOG_RULE%$'\n'}
+
 if [ "$KIND" = secondmate ]; then
 SECONDMATE_PROJECTS=""
 idx=1
@@ -564,7 +576,8 @@ The report is the only thing that survives, so anything worth keeping must be in
 
 # Rules
 1. Never push to any remote and never open a PR.
-2. Stay inside this worktree; the only files you may write outside it are the report and the status file below.
+2. Stay inside this worktree; the only files you may write outside it are the report, the status file below, and your progress log.
+$PROGRESS_LOG_RULE
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
 4. Report status by appending one line:
    \`$STATUS_APPEND\`
@@ -591,6 +604,7 @@ Write your findings to \`$DATA/$ID/report.md\`.
 The report must stand alone: what you did, what you found, the evidence (commands run, output, file:line references), and what you recommend.
 $LAVISH_LINE
 Before reporting done, read and follow \`$FM_ROOT/.agents/skills/captain-hold-lifecycle/SKILL.md\` and pass its shared completion gate for the report and any visual review.
+$(fm_dod_progress_log_line)
 When the report is complete, append \`done [at=<epoch>]: {one-line conclusion}\` to the status file and stop.
 If your findings reveal work that should ship (e.g. you reproduced a bug and the fix is clear), say so in the report; firstmate may promote this task in place, and you would then receive mode-specific ship instructions as a follow-up message.
 EOF
@@ -638,7 +652,8 @@ If the top-level path is the primary checkout or not the worktree you were launc
 
 # Rules
 $RULE1
-2. Stay inside this worktree; modify nothing outside it.
+2. Stay inside this worktree; modify nothing outside it except your progress log below and the files the other rules name, such as the status file.
+$PROGRESS_LOG_RULE
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
 4. Report status by appending one line:
    \`$STATUS_APPEND\`

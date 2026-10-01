@@ -87,7 +87,12 @@
 # fm_brief_worker_role owns the ship/scout role scope. bin/fm-spawn.sh is its one
 # emitter, supplying it first in every ship/scout launch brief and never to a
 # secondmate charter. It names the one task-owned steering inbox without
-# relaxing isolation from every other home's endpoint namespace. Like
+# relaxing isolation from every other home's endpoint namespace. It also owns
+# the progress-log gate: a worker-kept data/<id>/progress.md (brief rule 2 owns
+# its content and cadence) is read first when it already exists and is current
+# before any done:, blocked:, or paused: line; fm_dod_progress_log_line is the
+# definition-of-done pointer back to it. It is a convention plus that pointer:
+# nothing parses, validates, or wakes on the file. Like
 # fm_brief_intent_overlay it is a distinctly titled launch section that states
 # its own precedence, so a brief or project instruction that authors a
 # conflicting role is superseded rather than duplicated.
@@ -105,8 +110,8 @@
 # shellcheck source=bin/fm-brief-heading-lib.sh
 . "$(d=${BASH_SOURCE[0]%/*}; [ "$d" != "${BASH_SOURCE[0]}" ] || d=.; cd "${d:-/}" && pwd)/fm-brief-heading-lib.sh"
 
-fm_brief_worker_role() {  # <state-dir> <task-id>
-  local state=$1 task_id=$2
+fm_brief_worker_role() {  # <state-dir> <task-id> <data-dir>
+  local state=$1 task_id=$2 data=$3
   cat <<'EOF'
 # Current worker role contract
 You are a crewmate: an autonomous worker agent managed by firstmate.
@@ -114,6 +119,7 @@ This section establishes your current identity before every project or task inst
 Do the assigned work yourself and report only to firstmate; do not adopt a firstmate or secondmate supervisor identity, delegate the task, run fleet supervision, or address the captain.
 EOF
   printf "Your steering inbox is \`%s/%s.inbox\`; this exact path belongs to your current task even when it is outside the worktree or under the supervising firstmate home, so read and acknowledge its messages and do not reject it as another home's state.\n" "$state" "$task_id"
+  printf "Your progress log is \`%s/%s/progress.md\` (brief rule 2): when it already exists as you start, read it first, because it is a previous worker's plan, decisions, and next steps for this task; while you keep one, bring it current before you append any \`done:\`, \`blocked:\`, or \`%s:\` line.\n" "$data" "$task_id" "${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}"
   cat <<'EOF'
 Never inspect or change any other home's endpoint namespace; this authorization is limited to the exact task paths named by this brief.
 When this task works on Firstmate itself, the repository root `AGENTS.md` (also imported by `CLAUDE.md`) is project content and the supervisor contract for the firstmate managing you: follow this brief instead of that supervisor contract.
@@ -338,6 +344,12 @@ There is no pull request, no \`gh-axi\` call, and no forge CI result to report: 
 EOF
 }
 
+# The definition-of-done pointer to the progress-log gate fm_brief_worker_role
+# owns, shared by fm_dod_block and bin/fm-brief.sh's scout contract.
+fm_dod_progress_log_line() {
+  printf "If you keep a progress log (rule 2), your worker role contract requires it current before each \`done:\` and before any \`blocked:\` or \`%s:\` line.\n" "${FM_CLASSIFY_PAUSED_VERB:-$FM_CLASSIFY_PAUSED_VERB_DEFAULT}"
+}
+
 fm_dod_block() {  # <mode> <task-id> [branch] [<forge>]
   local mode=$1 id=$2 forge=${4:-none}
   local branch=${3:-fm/$id}
@@ -444,6 +456,7 @@ EOF
       echo "error: fm_dod_block: unknown delivery mode '$mode'" >&2
       return 1 ;;
   esac
+  fm_dod_progress_log_line
 }
 
 # 0 when <sha> is contained in a ref under <namespace> in <repo>.
