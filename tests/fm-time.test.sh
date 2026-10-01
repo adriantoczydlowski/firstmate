@@ -624,6 +624,53 @@ EOF
   pass "teardown capture records a ship branch's first-to-last commit span, and propose credits it after cleanup"
 }
 
+test_commit_span_crossing_a_declared_wait_keeps_evidence_in_both_windows() {
+  local home repo wt t0 record out list evidence_count
+  home=$(make_home capture-ship-wait)
+  repo="$home/project"
+  wt="$home/wt"
+  t0=$(local_epoch "2026-09-08 09:00")
+  git init -q -b main "$repo"
+  commit_at "$repo" "$((t0 - 86400))" "baseline"
+  git -C "$repo" worktree add -q -b fm/ship-wait "$wt" main
+  commit_at "$wt" "$((t0 + 600))" "first"
+  commit_at "$wt" "$((t0 + 4200))" "second"
+  cat > "$home/state/ship-wait.meta" <<EOF
+project=$repo
+kind=ship
+branch=fm/ship-wait
+worktree=$wt
+EOF
+  cat > "$home/state/ship-wait.status" <<EOF
+paused [at=$((t0 + 1800))]: waiting on review
+resolved [at=$((t0 + 3000))]: resumed work
+EOF
+  touch_at "$home/state/ship-wait.status" 2026-09-08 09:50
+
+  FM_HOME="$home" "$FMTIME" capture ship-wait || fail "capture failed on a ship worktree with a declared wait"
+  record="$home/data/time-tracking/evidence/ship-wait.record"
+  assert_grep "commits_first=$((t0 + 600))" "$record" "commit span does not start at the first branch commit"
+  assert_grep "commits_last=$((t0 + 4200))" "$record" "commit span does not end at the last branch commit"
+
+  # Teardown then drops the live status and task record, as it would after
+  # the task closes; propose must replay from the captured record alone.
+  rm -f "$home/state/ship-wait.status" "$home/state/ship-wait.meta"
+
+  out=$(FM_HOME="$home" "$FMTIME" propose --since "2026-09-01 00:00") \
+    || fail "propose failed on a commit span crossing a declared wait"
+  assert_contains "$out" "2 proposed window" "a declared wait inside the commit span did not split it into two windows"
+  list=$(FM_HOME="$home" "$FMTIME" list)
+  assert_contains "$list" "start    2026-09-08 09:10" "first window does not start at the first commit"
+  assert_contains "$list" "end      2026-09-08 09:30" "first window does not end at the wait's start"
+  assert_contains "$list" "start    2026-09-08 09:50" "second window does not start at the wait's end"
+  assert_contains "$list" "end      2026-09-08 10:10" "second window does not end at the last commit"
+  evidence_count=$(grep -c 'evidence:.*2 commit(s) on fm/ship-wait' <<< "$list")
+  [ "$evidence_count" -eq 2 ] \
+    || fail "commit-span evidence did not survive into both windows split by the declared wait (found in $evidence_count)"
+
+  pass "a commit span split by a declared wait keeps its evidence in both resulting windows"
+}
+
 test_teardown_capture_records_scout_scratch_commits_only() {
   local home repo wt t0 record
   home=$(make_home capture-scout)
@@ -700,5 +747,6 @@ test_time_tracking_never_writes_supervision_state
 test_single_stamped_status_line_keeps_the_pad_fallback
 test_status_replay_credits_active_intervals_and_excludes_a_paused_span
 test_teardown_capture_records_a_ship_branch_commit_span
+test_commit_span_crossing_a_declared_wait_keeps_evidence_in_both_windows
 test_teardown_capture_records_scout_scratch_commits_only
 test_captured_status_log_is_replayed_once_after_teardown

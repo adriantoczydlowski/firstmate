@@ -689,12 +689,10 @@ cluster_evidence() {
     function add_piece(st, cov, cred, item) {
       np++
       pst[np] = st; pcov[np] = cov; pcred[np] = cred; pitem[np] = item
-      pfirst[np] = !(item in placed)
-      placed[item] = 1
     }
-    function process(   i, w, k, nseg, nnew, s, cred, inside, p, q, t, win, target, blocked, line) {
+    function process(   i, w, k, nseg, nnew, s, cred, inside, p, q, t, win, target, blocked, line, wkey) {
       np = 0
-      split("", placed); split("", ord)
+      split("", ord); split("", winitem)
       for (i = 1; i <= ni; i++) {
         s = is[i] + 0
         if (ie[i] == "") {
@@ -747,7 +745,9 @@ cluster_evidence() {
         }
         i = pitem[p]
         wdesc[nwin] = it[i]
-        if (pfirst[p]) {
+        wkey = i SUBSEP nwin
+        if (!(wkey in winitem)) {
+          winitem[wkey] = 1
           line = is[i] " | " isrc[i] " | " it[i]
           if (ie[i] != "") line = line " (until " fmt(ie[i]) ")"
           wn[nwin]++; wev[nwin, wn[nwin]] = line
