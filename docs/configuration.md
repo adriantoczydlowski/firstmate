@@ -1271,6 +1271,11 @@ A herdr, zellij, or cmux home is therefore never told `tmux` is missing, and the
 - An absent or incompatible `gh-axi` reports `MISSING: gh-axi (install: npm install -g gh-axi && gh-axi setup hooks)`.
 - An absent or incompatible `lavish-axi` reports `PRESENTATION_UNAVAILABLE` with its required floor, install command, and explicit text fallback; [`bootstrap-diagnostics`](../.agents/skills/bootstrap-diagnostics/SKILL.md) owns the response and compatibility check before visual use.
 - An absent or too-old `quota-axi` reports `MISSING: quota-axi (install: npm install -g quota-axi)`; firstmate cannot resolve a profile array without a compatible binary.
+- An installed `chrome-devtools-axi` that cannot launch a browser reports `BROWSER_UNAVAILABLE` with the tool's own launch error, because its default launch finds Chrome only at a release channel's fixed install path.
+  The deferred startup stage proves the launch with a bounded headless probe under a dedicated per-home session, so a worker does not discover the gap mid-task; [`bin/fm-bootstrap.sh`](../bin/fm-bootstrap.sh) owns the probe and [`bootstrap-diagnostics`](../.agents/skills/bootstrap-diagnostics/SKILL.md) owns the response.
+  The probe checks bootstrap's own environment as a proxy, not a spawned worker's actual environment: a worker's destination pane can carry a different `PATH`, or (when `config/launch-env-allowlist` exists) drop a `CHROME_DEVTOOLS_AXI_*` setting the allowlist omits, so a worker can still fail to launch a browser even when this probe reports no problem.
+  The fix is a browser `chrome-devtools-axi --help` can reach, set where workers inherit it and named in `config/launch-env-allowlist` when that file exists ("Worker launch environment" above).
+  The probe's open bound is capped to keep its fixed 15s stop bound inside `FM_STARTUP_NETWORK_TIMEOUT`, so a short outer budget cannot swallow the browser result into a generic `NETWORK_CHECKS` timeout; a stop that fails or hits that bound reports `BROWSER_PROBE_CLEANUP` naming the per-home probe session instead of discarding the failure.
 
 **Checkout diagnostics**
 
@@ -2265,6 +2270,7 @@ FM_SESSION_START_ENDPOINT_TIMEOUT=10   # seconds bounding each per-task endpoint
 FM_BACKLOG_ROW_TIMEOUT_SECS=10   # seconds bounding each backlog row read (bin/fm-backlog-transition-lib.sh); nonpositive or invalid values fall back to 10; the first bound hit latches the sweep so later reads return immediately, each still naming its own item
 FM_BOOTSTRAP_DETECT_ONLY=0   # internal/read-only session-start mode: skip bootstrap's mutating sweeps and print advisory TANGLE wording
 FM_BOOTSTRAP_NETWORK=all   # internal session-start phase split: all, skip (local steps only), or only (network steps only); see bin/fm-bootstrap.sh
+FM_BROWSER_PROBE_TIMEOUT=45   # positive seconds bounding bootstrap's deferred chrome-devtools-axi launch probe; invalid or non-positive values use 45; capped so it plus the probe's fixed 15s stop bound never exceeds FM_STARTUP_NETWORK_TIMEOUT
 FM_STARTUP_NETWORK_TIMEOUT=120   # seconds bounding the deferred inactive-outcome scan plus network checks, including the lock waits the worker makes before them; hitting it prints an actionable NETWORK_CHECKS line, and a lock a live process still holds at the deadline ends the worker with a failed-rerun record (publication and delivery are bounded by FM_SESSION_START_TIMEOUT the same way)
 FM_TASKS_AXI_COMPATIBLE=   # internal one-hop handoff of an already-computed tasks-axi compatibility verdict (0 or 1); consumed when bin/fm-tasks-axi-lib.sh is sourced
 FM_GUARD_READ_ONLY=0    # internal/read-only guard mode: keep alarms but suppress drain, supervision repair, and checkout repair commands
