@@ -6688,16 +6688,16 @@ test_captain_held_never_rechecked_while_away_record_exists() {
 }
 
 # Quiet mode's record is a present captain (bin/fm-afk-contract.sh AWAY OR
-# QUIET), so it silences nothing: the same hold is rechecked with that record
-# live, both on the watcher's own cadence and through the one-shot handoff a
-# running quiet daemon owns.
+# QUIET), so it silences nothing: the same hold gets the one sighting it gets
+# while attended with that record live, both on the watcher's own pass and
+# through the one-shot handoff a running quiet daemon owns.
 write_quiet_record() {  # <state>
   if ! FM_HOME="$(dirname "$1")" FM_STATE_OVERRIDE="$1" FM_AFK_MODE=quiet "$ROOT/bin/fm-afk-contract.sh" enter --words 'keep routine wakes off my main' >/dev/null 2>&1; then
     fail "could not write quiet mode's record in $1"
   fi
 }
 
-test_captain_held_rechecked_under_a_quiet_record() {
+test_captain_held_surfaced_under_a_quiet_record() {
   local dir state fakebin out capture_file statusf window key back pid
   dir=$(make_case quiet-record-held); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; statusf="$state/secondmate-hold.status"
@@ -6718,13 +6718,13 @@ test_captain_held_rechecked_under_a_quiet_record() {
     FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
   pid=$!
-  wait_for_exit "$pid" 100 || { reap "$pid"; fail "a captain-held item was not rechecked beside quiet mode's record"; }
+  wait_for_exit "$pid" 100 || { reap "$pid"; fail "a captain-held item was not surfaced beside quiet mode's record"; }
   unset FM_FAKE_CREW_STATE
-  grep -F "awaiting the captain" "$out" >/dev/null || fail "the recheck beside a quiet record did not name the captain: $(cat "$out")"
+  grep -F "awaiting the captain" "$out" >/dev/null || fail "the sighting beside a quiet record did not name the captain: $(cat "$out")"
   ! grep -F 'never rechecked while the away-posture record exists' "$state/.watch-triage.log" >/dev/null 2>&1 \
     || fail "quiet mode's record silenced a captain-held item as if the captain were away: $(cat "$state/.watch-triage.log")"
   [ -f "$state/.afk-contract" ] || fail "fixture: quiet mode's record is gone"
-  ack_stopped_cycle "$state" || fail "could not acknowledge the captain-held recheck"
+  ack_stopped_cycle "$state" || fail "could not acknowledge the captain-held sighting"
 
   dir=$(make_case quiet-daemon-held-oneshot); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; statusf="$state/held-afk.status"
@@ -6744,7 +6744,7 @@ test_captain_held_rechecked_under_a_quiet_record() {
   wait_for_exit "$pid" 100 || { reap "$pid"; fail "the quiet daemon's one-shot never handed off a captain-held pane"; }
   grep -F "stale: $window" "$state/.wake-queue" >/dev/null \
     || fail "the quiet daemon's one-shot did not queue the captain-held pane for the daemon: $(cat "$state/.wake-queue" 2>/dev/null)"
-  pass "quiet mode's record silences no captain-held recheck, on the watcher's cadence or through a quiet daemon's one-shot"
+  pass "quiet mode's record silences no captain-held sighting, on the watcher's own pass or through a quiet daemon's one-shot"
 }
 
 test_live_captain_held_first_sight_silenced_by_away_record() {
@@ -7054,7 +7054,7 @@ test_captain_held_never_rechecked_while_away_record_exists
 test_live_captain_held_first_sight_silenced_by_away_record
 test_backlog_hold_never_rechecked_while_away_record_exists
 test_afk_one_shot_never_hands_off_captain_held_under_away_record
-test_captain_held_rechecked_under_a_quiet_record
+test_captain_held_surfaced_under_a_quiet_record
 test_paused_until_near_future_is_quiet_before_the_cadence
 test_paused_until_wrong_year_is_bounded_by_the_cadence
 test_paused_until_that_passed_is_rechecked_before_the_cadence
