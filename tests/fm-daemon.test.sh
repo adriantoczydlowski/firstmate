@@ -1257,6 +1257,46 @@ test_wait_on_captain_first_sight_escalates_once_under_quiet_mode() {
   pass "a wait declared on the captain is escalated exactly once per declaration under quiet mode and never under the away posture"
 }
 
+# The away record owns the one silence: nobody is there to answer a wait on the
+# captain, so it is not surfaced even once. Quiet mode's record is a present
+# captain (bin/fm-afk-contract.sh AWAY OR QUIET), so a quiet daemon still gives
+# a worker's wait on the captain its one first sight, exactly as with no record.
+# Neither record changes the cadence: a captain hold is never rechecked under
+# either one (test_housekeeping_wait_on_captain_is_never_rechecked owns that rule
+# without a record).
+test_wait_on_captain_silenced_only_by_an_away_record() {
+  local mode dir state fakebin pane key
+  for mode in away quiet; do
+    dir=$(make_supercase "wait-on-captain-$mode-record")
+    state="$dir/state"; fakebin="$dir/fakebin"; pane="$dir/pane.txt"
+    printf 'idle prompt $\n' > "$pane"
+    afk_enter "$state"
+    FM_HOME="$dir" FM_STATE_OVERRIDE="$state" FM_AFK_MODE="$mode" "$ROOT/bin/fm-afk-contract.sh" enter --words 'fixture words' >/dev/null 2>&1 \
+      || fail "fixture: could not record the $mode posture"
+    [ "$(FM_HOME="$dir" FM_STATE_OVERRIDE="$state" "$ROOT/bin/fm-afk-contract.sh" mode)" = "$mode" ] || fail "fixture: the record is not $mode"
+    fm_write_meta "$state/held-w11r.meta" "window=sess:fm-held-w11r" "worktree=$dir/wt" "kind=ship" "harness=pi"
+    printf 'paused [on=captain]: awaiting the captain on the merge word\n' > "$state/held-w11r.status"
+    FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 handle_wake "signal: $state/held-w11r.status" "$state"
+    printf 'captain-held [key=route]: tracked by task-decision-route\n' > "$state/held-w11h.status"
+    key=$(printf '%s' "held-w11h" | tr ':/.' '___')
+    echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$key"
+    PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="sess:fm-held-w11h" FM_FAKE_TMUX_CAPTURE="$pane" \
+      FM_STATE_OVERRIDE="$state" FM_ESCALATE_BATCH_SECS=999999 FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
+    grep -F "fm-held-w11h" "$state/.subsuper-escalations" >/dev/null 2>&1 \
+      && fail "[$mode] a captain hold was rechecked under the $mode record: $(cat "$state/.subsuper-escalations")"
+    if [ "$mode" = away ]; then
+      grep -F "awaiting the captain" "$state/.subsuper-escalations" >/dev/null 2>&1 \
+        && fail "a wait on the captain was surfaced while the away record exists: $(cat "$state/.subsuper-escalations")"
+    else
+      [ "$(grep -cF "awaiting the captain" "$state/.subsuper-escalations" 2>/dev/null || true)" = 1 ] \
+        || fail "quiet mode's record withheld the first sight of a wait on the captain as if the captain were away: $(cat "$state/.subsuper-escalations" 2>/dev/null || true)"
+      grep -F "fm-held-w11r" "$state/.subsuper-escalations" >/dev/null \
+        || fail "the quiet-mode first sight does not name the waiting worker: $(cat "$state/.subsuper-escalations")"
+    fi
+  done
+  pass "a wait on the captain is silenced only under an away record, never under quiet mode's, and rechecked under neither"
+}
+
 # A crew that RESUMED - whose latest status line no longer declares the wait - drops
 # its pause tracking without escalating. The dimension pinned here is that pane busy
 # state does not GATE that clear: the status append alone ends the wait, on the
@@ -3298,6 +3338,7 @@ test_housekeeping_resumed_stale_cleared
 test_housekeeping_paused_resurfaces_and_resets
 test_housekeeping_wait_on_captain_is_never_rechecked
 test_wait_on_captain_first_sight_escalates_once_under_quiet_mode
+test_wait_on_captain_silenced_only_by_an_away_record
 test_housekeeping_paused_resumed_cleared
 test_housekeeping_busy_declared_wait_matures_its_window
 test_housekeeping_declared_time_controls_pause_recheck
