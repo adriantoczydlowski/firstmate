@@ -704,6 +704,35 @@ test_local_only_fork_remote_allows() {
   pass "local-only worktree with HEAD on a fork remote is torn down and the home summary is refreshed"
 }
 
+test_ship_teardown_captures_time_tracking_evidence() {
+  local case_dir rc t0 record
+  case_dir=$(make_case time-evidence)
+  write_meta "$case_dir" local-only ship
+  printf 'branch=fm/task-x1\n' >> "$case_dir/state/task-x1.meta"
+  t0=1788768000
+  GIT_COMMITTER_DATE="$((t0 + 600)) +0000" git -C "$case_dir/wt" -c user.email=t@t -c user.name=t \
+    commit -q --allow-empty -m "first"
+  GIT_COMMITTER_DATE="$((t0 + 3000)) +0000" git -C "$case_dir/wt" -c user.email=t@t -c user.name=t \
+    commit -q --allow-empty -m "second"
+  add_fork_with_pushed_branch "$case_dir"
+  printf 'working [at=%s]: setup done\ndone [at=%s]: ready\n' "$t0" "$((t0 + 3600))" > "$case_dir/state/task-x1.status"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "time-evidence: teardown should succeed when HEAD is on a fork remote"
+  record="$case_dir/data/time-tracking/evidence/task-x1.record"
+  assert_present "$record" "time-evidence: teardown captured no time-tracking evidence record"
+  assert_grep "commits_first=$((t0 + 600))" "$record" "time-evidence: commit span does not start at the first branch commit"
+  assert_grep "commits_last=$((t0 + 3000))" "$record" "time-evidence: commit span does not end at the last branch commit"
+  assert_grep "commits_count=2" "$record" "time-evidence: commit span did not count both branch commits"
+  assert_grep "status=done [at=$((t0 + 3600))]: ready" "$record" "time-evidence: status log was not captured before its removal"
+  assert_absent "$case_dir/state/task-x1.status" "time-evidence: teardown left the status log behind"
+  pass "ship teardown captures the branch commit span and status log as time-tracking evidence before cleanup"
+}
+
 test_teardown_closes_the_backlog_item_itself() {
   local case_dir out
   case_dir=$(make_case tasks-axi-close)
@@ -4251,6 +4280,7 @@ test_forced_child_missing_adapter_sibling_refuses_before_cleanup
 test_forced_secondmate_own_missing_adapter_sibling_refuses_before_child_cleanup
 test_retained_sources_still_reach_the_ordinary_refusal
 test_local_only_fork_remote_allows
+test_ship_teardown_captures_time_tracking_evidence
 test_teardown_closes_the_backlog_item_itself
 test_teardown_manual_backend_leaves_the_backlog_to_the_operator
 test_local_only_truly_unpushed_refuses

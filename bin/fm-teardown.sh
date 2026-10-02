@@ -90,6 +90,9 @@
 # name a live quarantined space and is retained for that sweep.
 # data/<id>/ is deliberately left in place: a successor spawn reads brief.md
 # from it.
+# Before the branch, slot, status log, and task record are cleaned up, a ship
+# or scout teardown runs bin/fm-time.sh capture, best effort, so that task's
+# time-tracking evidence survives; fm-time.sh's header owns that record.
 # Worktree-slot ownership (teardown-slot-collision): a treehouse pool slot is
 # reused across tasks, so a stale, duplicated, or drifted worktree= record can
 # name a slot a DIFFERENT live task now holds. Cleanup kills every process under
@@ -3559,6 +3562,17 @@ fi
 # Fix 3 (see script header): sweep remote job workers abandoned by an already
 # pruned code root. Best effort - a sweep failure never blocks this teardown.
 "$SCRIPT_DIR/fm-remote-job-reap-orphans.sh" >&2 || true
+
+# Time-tracking evidence: the status log and task record are removed below, and
+# the branch and slot do not survive cleanup, so bin/fm-time.sh capture (which
+# owns the record) reads them now. Best effort - it never blocks cleanup.
+if [ "$KIND" != secondmate ]; then
+  TIME_CAPTURE_ARGS=()
+  teardown_owns_worktree || TIME_CAPTURE_ARGS=(--no-commits)
+  FM_HOME=$FM_HOME FM_STATE_OVERRIDE=$STATE FM_DATA_OVERRIDE=$DATA FM_CONFIG_OVERRIDE=$CONFIG \
+    "$SCRIPT_DIR/fm-time.sh" capture "$ID" "${TIME_CAPTURE_ARGS[@]+"${TIME_CAPTURE_ARGS[@]}"}" \
+    || echo "warning: time-tracking evidence for $ID could not be captured; its hours will rest on the backlog day marker alone" >&2
+fi
 
 # Best-effort: drop the local task branch so the shared repo does not accumulate refs.
 if [ "$BACKEND" = orca ] && [ "$KIND" != secondmate ]; then
