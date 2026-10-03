@@ -2,7 +2,7 @@
 // working row while Calm is on, its cadence on the mocked clock, its size against the
 // viewport, and how it lets go of a site the surface no longer draws.
 import { describe, expect, test } from "claude-code/testing";
-import { calmCommand, decodeCells, isStock, rasterOf, spinner, themeChange, unmeasuredSpinner, world } from "./support.ts";
+import { PREFERENCE, calmCommand, decodeCells, isStock, rasterOf, spinner, themeChange, unmeasuredSpinner, world } from "./support.ts";
 
 const SAIL = "◿│◣";
 const HULL = "╲▁▁▁╱";
@@ -89,6 +89,40 @@ describe("the working ship", () => {
     expect(journal.blits).toHaveLength(1);
     expect(isStock(await $.ui.render(spinner()))).toBe(true);
     await clock.advance(TICK * 4);
+    expect(journal.blits).toHaveLength(1);
+  });
+
+  test("stops its timer when toggled off, and animates again once toggled back on", async ($, on) => {
+    const { clock, journal } = world(on, { preference: "on\n" });
+    await $.session.start({ cwd: "/work", surface: "terminal", isInteractive: true });
+    await $.ui.render(spinner());
+    await clock.advance(TICK);
+    expect(journal.blits).toHaveLength(1);
+    await $.command.run(calmCommand());
+    await clock.advance(TICK);
+    const periodsWhenOff = journal.clockPeriods;
+    await clock.advance(TICK * 8);
+    expect(journal.clockPeriods).toBe(periodsWhenOff);
+    expect(journal.blits).toHaveLength(1);
+    await $.command.run(calmCommand());
+    await $.ui.render(spinner());
+    await clock.advance(TICK * 2);
+    expect(journal.clockPeriods).toBeGreaterThan(periodsWhenOff);
+    expect(journal.blits).toHaveLength(3);
+  });
+
+  test("stops its timer when a new session loads Calm off", async ($, on) => {
+    const { clock, journal, files } = world(on, { preference: "on\n" });
+    await $.session.start({ cwd: "/work", surface: "terminal", isInteractive: true });
+    await $.ui.render(spinner());
+    await clock.advance(TICK);
+    expect(journal.blits).toHaveLength(1);
+    files.set(PREFERENCE, "off\n");
+    await $.session.start({ cwd: "/work", surface: "terminal", isInteractive: true });
+    await clock.advance(TICK);
+    const periodsWhenOff = journal.clockPeriods;
+    await clock.advance(TICK * 8);
+    expect(journal.clockPeriods).toBe(periodsWhenOff);
     expect(journal.blits).toHaveLength(1);
   });
 
