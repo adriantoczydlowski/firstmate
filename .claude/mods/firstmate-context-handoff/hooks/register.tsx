@@ -1,88 +1,82 @@
-// firstmate-context-handoff (prototype): an early, optional context-reset courtesy.
+// firstmate-context-handoff: an early, optional context-reset courtesy for the sessions
+// that load this repository's project mods - the captain's main window and a secondmate.
 //
 // When the session has used THRESHOLD tokens of context (consumption, not remaining),
-// it acts by session kind, told apart only by what fm-spawn already sets at launch:
+// and the per-home `config/context-handoff` switch is on, it acts by session kind, told
+// apart only by what fm-spawn already sets at launch:
 // - main window (no FM_TASK_ID, no COMPACT_ADVISER_DISABLE=1, /stow available): a band
 //   above the prompt offers /stow; once the stow turn ends it offers a clear, which
 //   runs /clear and appends the stow receipt to the fresh session as a row the model
 //   reads and the person does not see.
-// - Firstmate worker (FM_TASK_ID set, /handoff available): no button. The session
-//   writes its own handoff to <home>/data/<task>/handoff.md (home read from the status
-//   path its launch brief names) and, once that file exists, appends one line to its
-//   own status file, the channel every other worker event already uses.
-// - anything else (a secondmate: COMPACT_ADVISER_DISABLE=1 without FM_TASK_ID, or a
-//   session with neither command) stays inert.
+// - secondmate (COMPACT_ADVISER_DISABLE=1 without FM_TASK_ID, /stow available): nobody
+//   watches its pane, so it runs /stow itself, once per crossing, and shows nothing.
+// - anything else stays inert: a ship or scout worker (FM_TASK_ID set) is served by the
+//   separate firstmate-context-handoff-worker mod fm-spawn loads for it, and a session
+//   without /stow is not a Firstmate session.
 //
+// The switch and the kind are read once, at the first crossing, never below it.
 // It hooks no classic.* event, never answers an event in place of the engine, and
 // wraps its own work in try/catch around `next(e)`, so a failure here leaves the
-// session as it would be without the mod.
+// session as it would be without the mod. docs/context-handoff.md owns the contract.
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { HandoffPhase } from '../types'
 
-const PLUGIN = 'firstmate-context-handoff'
 const THRESHOLD = 250_000
 
 const phase = atom({ plugin: 'firstmate-context-handoff', key: 'phase' } as const, 'idle' as HandoffPhase)
 const usedTokens = atom({ plugin: 'firstmate-context-handoff', key: 'usedTokens' } as const, 0)
 
-type Kind = { kind: 'main' } | { kind: 'crew'; taskId: string } | { kind: 'inert'; why: string }
+type Kind = { kind: 'main' } | { kind: 'secondmate' } | { kind: 'inert'; why: string }
 
 // Module state: a reload starts it over, like any module variable. `mirror` copies
 // the band's $.state phase so the per-turn check needs no $ call below the threshold.
 const S: {
-  threshold: number | undefined
   kind: Promise<Kind> | undefined
-  taskId: string | null | undefined
   mirror: HandoffPhase
-  statusPath: string | undefined
-  handoffPath: string | undefined
-  requestedAt: number
   receipt: string | undefined
   carryPending: string | undefined
   stowRunning: boolean
   firing: boolean
-  timing: boolean
-  spentMs: number
 } = {
-  threshold: undefined,
   kind: undefined,
-  taskId: undefined,
   mirror: 'idle',
-  statusPath: undefined,
-  handoffPath: undefined,
-  requestedAt: 0,
   receipt: undefined,
   carryPending: undefined,
   stowRunning: false,
   firing: false,
-  timing: false,
-  spentMs: 0,
 }
 
 export function kTokens(n: number): string {
   return `${Math.round(n / 1000)}k`
 }
 
-/** The status path the worker's own launch brief names: `'<home>/state/<id>.status'`. */
-export function findStatusPath(texts: readonly string[], taskId: string): string | undefined {
-  const escaped = taskId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const pattern = new RegExp(`'(/[^'\\n]*/state/${escaped}\\.status)'`)
-  for (const text of texts) {
-    const match = pattern.exec(text)
-    if (match) return match[1]
-  }
-  return undefined
+export type HomeEnvironment = {
+  readonly FM_HOME?: string | undefined
+  readonly FM_ROOT_OVERRIDE?: string | undefined
+  readonly FM_CONFIG_OVERRIDE?: string | undefined
 }
 
-/** `<home>/state/<id>.status` -> `<home>/data/<id>/handoff.md` */
-export function handoffPathFor(statusPath: string, taskId: string): string {
-  return `${statusPath.slice(0, -`/state/${taskId}.status`.length)}/data/${taskId}/handoff.md`
+function parentDirectory(path: string): string {
+  const trimmed = path.replace(/\/+$/, '')
+  const cut = trimmed.lastIndexOf('/')
+  return cut <= 0 ? '/' : trimmed.slice(0, cut)
 }
 
-export function statusLine(epochSeconds: number, used: number, handoffPath: string): string {
-  return `working [at=${epochSeconds}]: context handoff written at ${kTokens(used)} tokens used: ${handoffPath}`
+/**
+ * The per-home `config/context-handoff` path, resolved as Calm resolves `config/calm`:
+ * `FM_CONFIG_OVERRIDE` names the config directory outright, otherwise `FM_HOME`, then
+ * `FM_ROOT_OVERRIDE`, then the code root three levels above this mod's folder.
+ */
+export function switchPath(env: HomeEnvironment, pluginRoot: string): string {
+  const root = env.FM_HOME || env.FM_ROOT_OVERRIDE || parentDirectory(parentDirectory(parentDirectory(pluginRoot)))
+  return `${env.FM_CONFIG_OVERRIDE || `${root}/config`}/context-handoff`
+}
+
+/** `on` is on; absent, unreadable, or anything else is off. */
+export function parseSwitch(stored: string | undefined): boolean {
+  return stored !== undefined && stored.trim() === 'on'
 }
 
 export function carryText(used: number, receipt: string): string {
@@ -92,10 +86,6 @@ export function carryText(used: number, receipt: string): string {
     '',
     receipt.trim() || '(the /stow turn left no receipt text)',
   ].join('\n')
-}
-
-function stripFrontmatter(text: string): string {
-  return text.startsWith('---') ? text.replace(/^---\n[\s\S]*?\n---\n?/, '') : text
 }
 
 function debug($: EngineInterface, text: string): void {
@@ -111,21 +101,28 @@ async function setPhase($: EngineInterface, next: HandoffPhase): Promise<void> {
   await update($, phase, () => next)
 }
 
-async function thresholdOf($: EngineInterface): Promise<number> {
-  if (S.threshold !== undefined) return S.threshold
-  // Lab knobs only: a lower threshold so a short session crosses it, and timing lines.
-  const lab = await $.env.get('FM_CONTEXT_HANDOFF_LAB_THRESHOLD')
-  S.timing = (await $.env.get('FM_CONTEXT_HANDOFF_LAB_TIMING')) === '1'
-  S.threshold = lab !== undefined && /^\d+$/.test(lab) ? Number(lab) : THRESHOLD
-  return S.threshold
+async function switchedOn($: EngineInterface): Promise<boolean> {
+  const path = switchPath(
+    {
+      FM_HOME: await $.env.get('FM_HOME'),
+      FM_ROOT_OVERRIDE: await $.env.get('FM_ROOT_OVERRIDE'),
+      FM_CONFIG_OVERRIDE: await $.env.get('FM_CONFIG_OVERRIDE'),
+    },
+    $.plugin.root,
+  )
+  try {
+    return parseSwitch(await $.fs.read(path))
+  } catch {
+    return false
+  }
 }
 
 async function detect($: EngineInterface): Promise<Kind> {
-  const taskId = await $.env.get('FM_TASK_ID')
+  if (await $.env.get('FM_TASK_ID')) return { kind: 'inert', why: 'a ship or scout worker; its own mod serves it' }
+  if (!(await switchedOn($))) return { kind: 'inert', why: 'config/context-handoff is not on' }
   const names = new Set((await $.command.list()).map(c => c.name))
-  if (taskId) return names.has('handoff') ? { kind: 'crew', taskId } : { kind: 'inert', why: 'worker without /handoff' }
-  if ((await $.env.get('COMPACT_ADVISER_DISABLE')) === '1') return { kind: 'inert', why: 'Firstmate-launched, no task (secondmate)' }
-  return names.has('stow') ? { kind: 'main' } : { kind: 'inert', why: 'no /stow in this session' }
+  if (!names.has('stow')) return { kind: 'inert', why: 'no /stow in this session' }
+  return (await $.env.get('COMPACT_ADVISER_DISABLE')) === '1' ? { kind: 'secondmate' } : { kind: 'main' }
 }
 
 async function kindOf($: EngineInterface): Promise<Kind> {
@@ -134,10 +131,9 @@ async function kindOf($: EngineInterface): Promise<Kind> {
 }
 
 /** The per-turn check: below the threshold and already idle, no $ call at all. */
-async function check($: EngineInterface, used: number | undefined, isTurnRunning: boolean): Promise<void> {
+async function check($: EngineInterface, used: number | undefined): Promise<void> {
   if (used === undefined) return
-  const limit = S.threshold ?? (await thresholdOf($))
-  if (used < limit) {
+  if (used < THRESHOLD) {
     // A /clear or a compaction brought the window back under: arm again.
     if (S.mirror !== 'idle' && S.mirror !== 'clearing') await rearm($)
     return
@@ -146,12 +142,17 @@ async function check($: EngineInterface, used: number | undefined, isTurnRunning
   S.firing = true // claim the crossing before the first await
   try {
     const kind = await kindOf($)
-    debug($, `crossed ${used} of ${limit} tokens; kind ${kind.kind}${kind.kind === 'inert' ? ` (${kind.why})` : ''}`)
+    debug($, `crossed ${used} of ${THRESHOLD} tokens; kind ${kind.kind}${kind.kind === 'inert' ? ` (${kind.why})` : ''}`)
     if (kind.kind === 'main') {
       await update($, usedTokens, () => used)
       await setPhase($, 'suggest')
-    } else if (kind.kind === 'crew') {
-      await requestHandoff($, kind.taskId, used, isTurnRunning)
+    } else if (kind.kind === 'secondmate') {
+      // Nothing more this window: one self-run /stow, no band.
+      await setPhase($, 'dismissed')
+      // Outside the measuring dispatch: a direct call there holds it until dequeued.
+      $.clock.after(0, () => {
+        $.command.run({ command: 'stow' }).catch((error: unknown) => debug($, `secondmate /stow refused: ${String(error)}`))
+      })
     } else {
       await setPhase($, 'dismissed')
     }
@@ -165,85 +166,9 @@ async function check($: EngineInterface, used: number | undefined, isTurnRunning
 
 async function rearm($: EngineInterface): Promise<void> {
   S.stowRunning = false
-  S.statusPath = undefined
-  S.handoffPath = undefined
   S.receipt = undefined
   await setPhase($, 'idle')
 }
-
-// ---- worker ----------------------------------------------------------------------
-
-async function handoffSkillText($: EngineInterface): Promise<string | undefined> {
-  const home = await $.env.get('HOME')
-  const paths = [`${await $.session.root()}/.claude/skills/handoff/SKILL.md`]
-  if (home) paths.push(`${home}/.claude/skills/handoff/SKILL.md`)
-  for (const path of paths) {
-    try {
-      return stripFrontmatter(await $.fs.read(path)).trim()
-    } catch {
-      // Next candidate.
-    }
-  }
-  return undefined
-}
-
-async function requestHandoff($: EngineInterface, taskId: string, used: number, isTurnRunning: boolean): Promise<void> {
-  const users = (await $.session.messages()).filter(m => m.role === 'user').map(m => m.text)
-  const statusPath = findStatusPath(users, taskId)
-  if (statusPath === undefined) {
-    debug($, `worker ${taskId}: no status path in the transcript; staying quiet`)
-    await setPhase($, 'dismissed')
-    return
-  }
-  S.statusPath = statusPath
-  S.handoffPath = handoffPathFor(statusPath, taskId)
-  S.requestedAt = await $.clock.now()
-  await setPhase($, 'stowing')
-  const where = `Save the handoff document to ${S.handoffPath} (Firstmate's durable location for this task; create the folder if missing) instead of the temporary directory, replacing any older one.`
-  if (isTurnRunning) {
-    // No command runs until the turn ends, and a worker's turn can run for hours: hand
-    // the model the same procedure as a row it reads at the loop's next step.
-    const skill = await handoffSkillText($)
-    const text = [
-      `[${PLUGIN}] This session has used ${kTokens(used)} tokens of context.`,
-      'Write a handoff now so the task survives a context reset, then carry on with the task as before.',
-      where,
-      'Do not append a status line for it: the handoff mod reports it once the file exists.',
-      '',
-      skill === undefined ? 'Follow your /handoff procedure.' : `The /handoff procedure:\n\n${skill}`,
-    ].join('\n')
-    debug($, `worker ${taskId}: requesting the handoff mid-turn, ${text.length} characters`)
-    await $.session.append({ message: { type: 'user', content: [{ type: 'text', text }] } })
-    debug($, `worker ${taskId}: handoff requested mid-turn`)
-  } else {
-    // Idle: run the real /handoff, outside the measuring dispatch (a direct call there
-    // holds that dispatch until the command is dequeued).
-    $.clock.after(0, () => {
-      $.command
-        .run({ command: 'handoff', args: `Continuation of Firstmate task ${taskId}. ${where}` })
-        .catch((error: unknown) => debug($, `worker ${taskId}: /handoff refused: ${String(error)}`))
-    })
-  }
-}
-
-async function reportHandoff($: EngineInterface): Promise<void> {
-  if (S.handoffPath === undefined || S.statusPath === undefined || S.mirror !== 'stowing') return
-  let stat
-  try {
-    stat = await $.fs.stat(S.handoffPath)
-  } catch {
-    return
-  }
-  if (stat.kind !== 'file' || stat.mtimeMs < S.requestedAt) return
-  await setPhase($, 'dismissed')
-  const used = (await $.session.usage()).context.tokens ?? 0
-  const line = statusLine(Math.floor((await $.clock.now()) / 1000), used, S.handoffPath)
-  // O_APPEND through the shell, exactly as the worker's own `echo ... >>` does.
-  const run = await $.process.run(['/bin/sh', '-c', 'printf "%s\\n" "$1" >> "$2"', 'sh', line, S.statusPath])
-  debug($, `worker: status line appended (exit ${run.exitCode})`)
-}
-
-// ---- main window ---------------------------------------------------------------------
 
 async function carry($: EngineInterface): Promise<void> {
   const text = S.carryPending
@@ -272,7 +197,6 @@ async function pressClear($: EngineInterface): Promise<void> {
   S.carryPending = carryText(await read($, usedTokens), S.receipt ?? '')
   await setPhase($, 'clearing')
   try {
-    if ((await $.env.get('FM_CONTEXT_HANDOFF_LAB_NO_CLEAR')) === '1') throw new Error('lab: clear withheld')
     await $.command.run({ command: 'clear' })
   } catch (error) {
     // Fallback: the keystroke stays the person's; session.end carries the receipt.
@@ -291,51 +215,25 @@ async function pressClear($: EngineInterface): Promise<void> {
   }
 }
 
-async function timed($: EngineInterface, label: string, work: () => Promise<void>): Promise<void> {
-  const t0 = Date.now()
+async function guarded($: EngineInterface, label: string, work: () => Promise<void>): Promise<void> {
   try {
     await work()
   } catch (error) {
     debug($, `${label}: ${String(error)}`)
   }
-  if (S.timing) {
-    S.spentMs += Date.now() - t0
-    debug($, `timing ${label} ${Date.now() - t0}ms (session total ${S.spentMs}ms)`)
-  }
 }
-
-// ---- hooks -----------------------------------------------------------------------------
 
 export const register: Register = on => {
   // The cheap trigger: pushed after each main-thread turn, the figures in `e`.
   on('session.measure', async ($, e, next) => {
-    await timed($, 'measure', async () => {
-      if (S.threshold === undefined) await thresholdOf($)
-      if (S.timing) debug($, `measure: ${e.context.tokens ?? 'no'} tokens used of a ${e.context.window} window`)
-      if (e.changed.includes('context')) await check($, e.context.tokens, false)
-      if (S.mirror === 'stowing' && S.handoffPath !== undefined) await reportHandoff($)
-    })
+    if (e.changed.includes('context')) await guarded($, 'measure', () => check($, e.context.tokens))
     return next(e)
   })
 
-  // Worker only: a worker's single turn can run past the threshold for hours, so look
-  // after each of its tool calls. Every other session pays one env read, then nothing.
-  on('tool.call', async ($, e, next) => {
-    const result = await next(e)
-    if (S.taskId === null || e.agentId !== undefined) return result
-    await timed($, 'tool.call', async () => {
-      if (S.taskId === undefined) S.taskId = (await $.env.get('FM_TASK_ID')) ?? null
-      if (S.taskId === null) return
-      if (S.mirror === 'stowing' && S.handoffPath !== undefined) await reportHandoff($)
-      else if (S.mirror === 'idle') await check($, (await $.session.usage()).context.tokens, true)
-    })
-    return result
-  })
-
   on('turn.complete', async ($, e, next) => {
-    if (e.agentId === undefined && S.stowRunning && S.mirror === 'stowing' && S.handoffPath === undefined) {
+    if (e.agentId === undefined && S.stowRunning && S.mirror === 'stowing') {
       S.stowRunning = false
-      await timed($, 'turn.complete', async () => {
+      await guarded($, 'turn.complete', async () => {
         if (e.isAborted) {
           await setPhase($, 'suggest')
         } else {
@@ -351,7 +249,7 @@ export const register: Register = on => {
   on('command.run', { command: 'stow' }, async ($, e, next) => {
     if (S.mirror === 'suggest' || S.mirror === 'stowing') {
       S.stowRunning = true
-      await timed($, 'command.run', () => setPhase($, 'stowing'))
+      await guarded($, 'command.run', () => setPhase($, 'stowing'))
     }
     return next(e)
   })
@@ -360,7 +258,7 @@ export const register: Register = on => {
   on('session.end', async ($, e, next) => {
     const result = await next(e)
     if (e.reason !== 'clear') return result
-    await timed($, 'session.end', async () => {
+    await guarded($, 'session.end', async () => {
       const was = S.mirror
       S.kind = undefined
       if (was === 'ready') {
@@ -376,7 +274,7 @@ export const register: Register = on => {
     // Always read the phase, even while idle: the read subscribes this band, so the
     // crossing's $.state write redraws it. Gating on the local mirror skips that.
     const current = await read($, phase)
-    if (e.props.hasSurvey || S.handoffPath !== undefined) return next(e)
+    if (e.props.hasSurvey) return next(e)
     const { Box, Button, Text } = $.ui.resolve(e)
     if (current === 'stowing') {
       return (
