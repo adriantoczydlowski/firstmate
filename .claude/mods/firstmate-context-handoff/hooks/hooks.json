@@ -1,0 +1,4 @@
+{
+  "description": "Firstmate context-handoff hooks module, main-window part: acts only past 250k tokens of context used and only while the per-home config/context-handoff switch is on",
+  "modules": ["./register.tsx"]
+}

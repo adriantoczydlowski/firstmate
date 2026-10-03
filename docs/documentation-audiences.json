@@ -33,6 +33,12 @@
     "docs/cmux-backend.md",
     "docs/remote-secondmates.md"
   ],
+  "alwaysLoadedByteBudgets": [
+    {
+      "path": "AGENTS.md",
+      "maxBytes": 45000
+    }
+  ],
   "requiredOwnerPointers": [
     {
       "source": ".agents/skills/firstmate-coding-guidelines/SKILL.md",
@@ -61,6 +67,14 @@
     {
       "source": "docs/calm-mode-feasibility.md",
       "target": "docs/calm.md"
+    },
+    {
+      "source": "docs/context-handoff.md",
+      "target": "docs/verification/context-handoff.md"
+    },
+    {
+      "source": "docs/verification/context-handoff.md",
+      "target": "docs/context-handoff.md"
     },
     {
       "source": "docs/sessionstart-nudge.md",
@@ -129,6 +143,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/captain-facing-translation/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/captain-hold-lifecycle/SKILL.md",
       "audience": "agent-runtime"
     },
@@ -190,6 +208,10 @@
     },
     {
       "path": ".agents/skills/harness-adapters/references/harness/cursor.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/harness-adapters/references/harness/devin.md",
       "audience": "agent-runtime"
     },
     {
@@ -305,6 +327,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/context-handoff.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/cd-guard.md",
       "audience": "maintainer-architecture"
     },
@@ -365,12 +391,28 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/gerrit-change-watch.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/gerrit-forge-integration.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/gitlab-merge-watch.md",
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/fleet-ledger.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/herdr-backend.md",
       "audience": "operator-current"
+    },
+    {
+      "path": "docs/jev-guards.md",
+      "audience": "maintainer-architecture"
     },
     {
       "path": "docs/orca-backend.md",
@@ -429,8 +471,16 @@
       "audience": "agent-runtime"
     },
     {
+      "path": "docs/supervision-protocols/supervision-host.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": "docs/supervision-protocols/unknown.md",
       "audience": "agent-runtime"
+    },
+    {
+      "path": "docs/supervision-host.md",
+      "audience": "maintainer-architecture"
     },
     {
       "path": "docs/tmux-backend.md",
@@ -446,6 +496,14 @@
     },
     {
       "path": "docs/verification/agy.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/verification/context-handoff.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/verification/devin.md",
       "audience": "maintainer-verification"
     },
     {
@@ -519,6 +577,34 @@
     {
       "path": "tests/captures/no-mistakes-v1.70.1/README.md",
       "audience": "maintainer-verification"
+    },
+    {
+      "path": ".agents/skills/agent-skill-trigger-index/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/away-quiet-supervision/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/operational-home-layout/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/scout-completion/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/session-start-recovery/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/ship-landing/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
+      "path": ".agents/skills/validation-supervision/SKILL.md",
+      "audience": "agent-runtime"
     }
   ]
 }

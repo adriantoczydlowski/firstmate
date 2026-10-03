@@ -8,6 +8,8 @@
 #          Lines: "MISSING: <tool> (install: <command>)",
 #                 "PRESENTATION_UNAVAILABLE: lavish-axi (requires >=<floor>; install: <command>) - nonvisual work may proceed with plain-text decisions and reports; install or upgrade before using Lavish",
 #                 "MISSING_MANUAL: <tool> (instructions: <url>)", "NEEDS_GH_AUTH",
+#                 "BROWSER_UNAVAILABLE: chrome-devtools-axi cannot launch a browser (<reason>) - workers cannot verify UI behavior in a browser; other work may proceed; configure a launchable browser and rerun bootstrap before relying on browser verification; this probe checks bootstrap's own environment as a proxy, not a spawned worker's actual environment, so a worker on a different PATH or a stricter config/launch-env-allowlist can still fail even when this probe succeeds",
+#                 "BROWSER_PROBE_CLEANUP: chrome-devtools-axi <did not stop within <n>s|stop exited <n>> for probe session <session> - a probe browser may still be running under it; run CHROME_DEVTOOLS_AXI_SESSION=<session> chrome-devtools-axi stop to confirm cleanup",
 #                 "BACKEND_INVALID: <name> (known: <names>)",
 #                 "STARTUP_MEMORY_BUDGET: invalid config/startup-memory-budget - <reason>",
 #                 "CREW_DISPATCH: invalid config/crew-dispatch.json - <reason>",
@@ -64,10 +66,16 @@
 #          nonvisual dispatch continues with plain-text decisions and reports,
 #          but Lavish use still requires a compatible build at or above its floor.
 #          tasks-axi feature probes remain a separate defense-in-depth check.
+#          An installed chrome-devtools-axi must also launch a browser: the
+#          network phase opens a self-contained page headless under a dedicated
+#          per-home session and stops it, bounded by FM_BROWSER_PROBE_TIMEOUT
+#          (positive seconds, default 45), and reports BROWSER_UNAVAILABLE when
+#          no page opens. It runs only in a lock-owning run, never under
+#          FM_BOOTSTRAP_DETECT_ONLY=1; browser_launch_probe owns the details.
 #          tasks-axi and quota-axi are essential bootstrap tools.
 #          A compatible tasks-axi default backend is silent.
 #          quota-axi is required for the agent-owned dispatch-profile array
-#          procedure in AGENTS.md section 4 and
+#          procedure owned by
 #          .agents/skills/quota-array-dispatch/SKILL.md.
 #          On a primary home, the locked mutable path materializes the visible
 #          default config/startup-memory-budget=7500 when absent. It never
@@ -121,7 +129,8 @@
 #                 step. Unrecognized values fall back here on purpose: a typo
 #                 must never silently skip a safety sweep.
 #            skip - every LOCAL step, and none of the network ones. Skips
-#                 `gh auth status`, secondmate_liveness_sweep, secondmate_sync,
+#                 `gh auth status`, the browser launch probe,
+#                 secondmate_liveness_sweep, secondmate_sync,
 #                 secondmate_handoff_resume, and fleet_sync.
 #            only - ONLY those network steps and nothing else. No tool detection,
 #                 no version floors, no tangle check, no backlog
@@ -171,6 +180,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 # shellcheck source=bin/fm-backlog-transition-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-backlog-transition-lib.sh"
+# shellcheck source=bin/fm-timeout-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
 # shellcheck source=bin/fm-quota-axi-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-quota-axi-lib.sh"
 # shellcheck source=bin/fm-control-lib.sh disable=SC1091
@@ -195,6 +206,11 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-remote-readiness-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-remote-readiness-lib.sh"
+# Shared secondmate endpoint probe + guarded relaunch; the watcher's poll tick
+# drives the same library so session start and ordinary supervision recover
+# from identical evidence through an identical path.
+# shellcheck source=/dev/null # Analyzed separately as a canonical lint root.
+. "$SCRIPT_DIR/fm-secondmate-liveness-lib.sh"
 # fm-timing-lib.sh is inert unless FM_TIMING_LOG names a file, which only the
 # deferred network stage sets, so an ordinary bootstrap run records nothing.
 # shellcheck source=bin/fm-timing-lib.sh disable=SC1091
@@ -626,7 +642,7 @@ secondmate_sync() {
       "$SCRIPT_DIR/fm-remote-inherit-push.sh" "$id" "$remote_generation" 2>&1); then
       if printf '%s\n' "$inherit_out" | grep -Eq '^(pushed|removed):'; then nudge_needed=1; fi
     else
-      echo "SECONDMATE_SYNC: secondmate $id: skipped: remote inheritance failed on $remote_host: $(first_line "$inherit_out")"
+      echo "SECONDMATE_SYNC: secondmate $id: skipped: remote inheritance failed on $remote_host: $(remote_inherit_failure_reason "$inherit_out")"
       converged=0
     fi
     [ "$remote_pending" -eq 0 ] || nudge_needed=1
@@ -684,7 +700,8 @@ report_relaunch() {  # <id> <cause> <where>
 }
 
 secondmate_liveness_sweep() {
-  # Idempotent secondmate liveness guarantee - SESSION START ONLY. The detailed
+  # Idempotent secondmate liveness guarantee at session start; the watcher's
+  # secondmate_liveness_tick owns the same guarantee mid-session. The detailed
   # state machine and its only recovery-authorizing states are owned by
   # fm_backend_agent_state. A missing tmux pane is not enough: tmux must prove
   # the window or session absent. This preserves duplicate prevention for
@@ -693,8 +710,8 @@ secondmate_liveness_sweep() {
   # lacked.
   # A meta with no window remains owned by secondmate-provisioning recovery.
   # Secondmate homes never contain kind=secondmate meta, so this is naturally a
-  # primary-only no-op there. Mid-session liveness remains explicitly out of
-  # scope and requires a separate periodic signal.
+  # primary-only no-op there. The probe/relaunch mechanics live in
+  # bin/fm-secondmate-liveness-lib.sh; this sweep keeps the reporting.
   [ -d "$STATE" ] || return 0
   local meta id remote_host label __fm_timing_stamp parallel=0
   SECONDMATE_RESPAWNED_IDS=""
@@ -731,123 +748,36 @@ secondmate_liveness_one_timed() {  # <meta> <id> <label>
 # timed; every `return` here was a `continue` in the loop and means exactly the
 # same thing - move on to the next secondmate. Respawned ids are recorded through
 # secondmate_note_respawned so a concurrent sweep can collect them after wait.
+# Probe classification, kill, and spawn live in fm-secondmate-liveness-lib.sh;
+# this function keeps this sweep's exact reporting.
 secondmate_liveness_one() {  # <meta> <id>
   local meta=$1 id=$2
-  local window harness backend target agent_state out cause remote_host remote_rc readiness_reason route_out remote_backend
-  window=$(fm_meta_get "$meta" window)
-  [ -n "$window" ] || return 0
-  harness=$(fm_meta_get "$meta" harness)
-  remote_host=$(fm_meta_get "$meta" remote_host)
-  if [ -n "$remote_host" ]; then
-    remote_rc=0
-    fm_remote_readiness_ensure "$SCRIPT_DIR" "$id" || remote_rc=$?
-    if [ "$remote_rc" -eq 255 ]; then
-      echo "SECONDMATE_LIVENESS: secondmate $id: skipped: remote host unavailable or endpoint state unknown; route preserved on $remote_host"
-      return 0
-    fi
-    if [ "$remote_rc" -ne 0 ]; then
-      readiness_reason=$(printf '%s\n' "$FM_REMOTE_READINESS_OUT" \
-        | awk '/^check [^=]+=(fixable|human):|^action:|^error:/ { print; exit }')
-      [ -n "$readiness_reason" ] || readiness_reason=$(first_line "$FM_REMOTE_READINESS_OUT")
-      [ -n "$readiness_reason" ] || readiness_reason="unknown readiness failure"
-      echo "SECONDMATE_LIVENESS: secondmate $id: skipped: remote readiness failed on $remote_host: $readiness_reason"
-      return 0
-    fi
-    if out=$("$SCRIPT_DIR/fm-on.sh" "$id" fm-remote-secondmate-control.sh state "$id" < /dev/null 2>/dev/null); then
-      remote_rc=0
-    else
-      remote_rc=$?
-    fi
-    if [ "$remote_rc" -eq 255 ]; then
-      echo "SECONDMATE_LIVENESS: secondmate $id: skipped: remote host unavailable or endpoint state unknown; route preserved on $remote_host"
-      return 0
-    fi
-    if [ "$remote_rc" -ne 0 ]; then
-      echo "SECONDMATE_LIVENESS: secondmate $id: skipped: remote endpoint probe unreadable on $remote_host"
-      return 0
-    fi
-    agent_state=$(printf '%s\n' "$out" | tail -1)
-    case "$agent_state" in
-      alive)
-        if route_out=$("$SCRIPT_DIR/fm-on.sh" "$id" fm-remote-secondmate-control.sh route "$id" < /dev/null 2>/dev/null); then
-          remote_rc=0
-        else
-          remote_rc=$?
-        fi
-        if [ "$remote_rc" -eq 255 ]; then
-          echo "SECONDMATE_LIVENESS: secondmate $id: skipped: remote host unavailable or endpoint route unknown; route preserved on $remote_host"
-          return 0
-        fi
-        if [ "$remote_rc" -ne 0 ]; then
-          echo "SECONDMATE_LIVENESS: secondmate $id: skipped: alive remote endpoint route is unreadable on $remote_host; inspect and migrate or retire it explicitly"
-          return 0
-        fi
-        remote_backend=$(printf '%s\n' "$route_out" | sed -n 's/^backend=//p' | tail -1)
-        if [ "$remote_backend" != herdr ]; then
-          echo "SECONDMATE_LIVENESS: secondmate $id: skipped: alive remote endpoint is recorded on backend '${remote_backend:-missing}'; migrate or retire it explicitly"
-          return 0
-        fi
-        [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" != 1 ] || echo "BOOTSTRAP_INFO: remote secondmate $id already live (host=$remote_host)"
-        ;;
-      dead|missing)
-        cause="remote endpoint $agent_state on its configured host"
-        if out=$(FM_SPAWN_NO_GUARD=1 "$FM_ROOT/bin/fm-spawn.sh" "$id" --secondmate 2>&1); then
-          secondmate_note_respawned "$id"
-          report_relaunch "$id" "$cause" "host=$remote_host"
-        else
-          echo "SECONDMATE_LIVENESS: secondmate $id: respawn failed after $cause: $(first_line "$out")"
-        fi
-        ;;
-      ambiguous|unreadable|unverified)
-        echo "SECONDMATE_LIVENESS: secondmate $id: skipped: remote endpoint state is $agent_state on $remote_host"
-        ;;
-      *) echo "SECONDMATE_LIVENESS: secondmate $id: skipped: remote endpoint returned an invalid state" ;;
-    esac
+  if ! fm_secondmate_liveness_lock "$id"; then
+    echo "SECONDMATE_LIVENESS: secondmate $id: skipped: another liveness check is already in progress"
     return 0
   fi
-  backend=$(fm_backend_of_meta "$meta")
-  target=$(fm_backend_target_of_meta "$meta")
-  [ -n "$target" ] || target="$window"
-  agent_state=$(fm_backend_agent_state "$backend" "$target" 2>/dev/null) || agent_state=unreadable
-  case "$harness" in
-    claude|codex|opencode|pi|pi-signed|grok|kimi|omp) ;;
-    *)
-      case "$agent_state" in dead|missing) agent_state=unverified-harness ;; esac
+  fm_secondmate_liveness_probe "$meta" "$id" full
+  case "$FM_SM_LIVE_STATUS" in
+    silent)
       ;;
-  esac
-  case "$agent_state" in
     alive)
-      if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ]; then
-        echo "BOOTSTRAP_INFO: secondmate $id already live (backend=$backend)"
-      fi
+      [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" != 1 ] || echo "BOOTSTRAP_INFO: $FM_SM_LIVE_LINE"
       ;;
-    dead|missing)
-      if [ "$agent_state" = dead ]; then
-        cause="confirmed agent absence on existing endpoint"
-        fm_backend_kill "$backend" "$target" 2>/dev/null || true
-      else
-        cause="recorded endpoint confidently missing"
-      fi
-      if out=$(FM_SPAWN_NO_GUARD=1 "$FM_ROOT/bin/fm-spawn.sh" "$id" --secondmate 2>&1); then
+    relaunchable)
+      if fm_secondmate_liveness_relaunch "$meta" "$id"; then
         secondmate_note_respawned "$id"
-        report_relaunch "$id" "$cause" "backend=$backend"
+        report_relaunch "$id" "$FM_SM_LIVE_CAUSE" "$FM_SM_LIVE_WHERE"
+      elif [ "$FM_SM_LIVE_STATUS" = skipped ]; then
+        echo "SECONDMATE_LIVENESS: secondmate $id: skipped: $FM_SM_LIVE_REASON"
       else
-        echo "SECONDMATE_LIVENESS: secondmate $id: respawn failed after $cause: $(first_line "$out")"
+        echo "SECONDMATE_LIVENESS: secondmate $id: respawn failed after $FM_SM_LIVE_CAUSE: $(first_line "$FM_SM_LIVE_OUT")"
       fi
       ;;
-    ambiguous)
-      echo "SECONDMATE_LIVENESS: secondmate $id: skipped: existing endpoint has ambiguous agent process (backend=$backend)"
-      ;;
-    unreadable)
-      echo "SECONDMATE_LIVENESS: secondmate $id: skipped: endpoint probe unreadable (backend=$backend)"
-      ;;
-    unverified-harness)
-      echo "SECONDMATE_LIVENESS: secondmate $id: skipped: recorded harness '$harness' is unverified for recovery (backend=$backend)"
-      ;;
-    *)
-      echo "SECONDMATE_LIVENESS: secondmate $id: skipped: agent recovery classifier unverified (backend=$backend)"
+    skipped)
+      echo "SECONDMATE_LIVENESS: secondmate $id: skipped: $FM_SM_LIVE_REASON"
       ;;
   esac
+  fm_secondmate_liveness_unlock "$id"
   return 0
 }
 
@@ -923,7 +853,7 @@ NO_MISTAKES_MIN=1.46.0
 # tasks-axi feature probes are an independent defense-in-depth concern, not part
 # of its floor.
 GH_AXI_MIN=0.1.29
-LAVISH_AXI_MIN=0.1.46
+LAVISH_AXI_MIN=0.1.77
 
 treehouse_supports_lease() {
   treehouse get --help 2>&1 | grep -Eq '(^|[^[:alnum:]_-])--lease([^[:alnum:]_-]|$)'
@@ -1127,7 +1057,7 @@ crew_dispatch_validate() {
   if $typed_active; then
     verified_harnesses=$(fm_control_harnesses | jq -Rsc 'split("\n") | map(select(length > 0))')
   else
-    verified_harnesses='["claude","codex","opencode","pi","pi-signed","grok","kimi","cursor","agy","muse","rovo","omp"]'
+    verified_harnesses='["claude","codex","opencode","pi","pi-signed","grok","kimi","cursor","agy","muse","rovo","omp","devin"]'
   fi
   err=$(jq -r --argjson typed "$typed_active" --argjson verified_harnesses "$verified_harnesses" --arg provider_re "$FM_QUOTA_PROVIDER_ID_RE" '
     def verified($h): $verified_harnesses | index($h);
@@ -1194,6 +1124,7 @@ crew_dispatch_validate() {
     elif $typed and malformed_profile_floors([(.rules // [])[]? | profiles(.use?)[]?]) then "use profile floor needs scope and min_percent 0..100"
     elif $typed and ([(.rules // [])[]? | select(has("approval") and .approval != "captain")] | length > 0) then "approval must be \"captain\" when present"
     elif $typed and ([(.rules // [])[]? | select(has("floor") and floor_bad(.floor; true))] | length > 0) then "rule floor needs scope, min_percent 0..100, and provider matching ^[a-z0-9]+(-[a-z0-9]+)*\\z"
+    elif $typed and ([(.rules // [])[]? | select(has("min_confidence") and ((.min_confidence | type) != "number" or .min_confidence < 0 or .min_confidence > 1))] | length > 0) then "min_confidence must be a number from 0 through 1 when present"
     elif [(.rules // [])[]? | select(has("select") and ((.select? | type) != "string" or (.select | length) == 0))] | length > 0 then "select must be a non-empty string"
     elif [(.rules // [])[]? | .select? // empty | select(. != "quota-balanced")] | length > 0 then
       "unknown select: " + ([ (.rules // [])[]? | .select? // empty | select(. != "quota-balanced") ] | unique | join(", "))
@@ -1493,6 +1424,82 @@ detect_local_tools() {
   fi
 }
 
+# chrome-devtools-axi launch probe. Presence in COMMON_TOOLS does not prove the
+# tool can start a browser: its launch mode finds Chrome only at a channel's
+# fixed install path, so a host without one fails at a worker's first `open`.
+# This opens a self-contained page headless under a dedicated per-home session,
+# never a worker's own, then stops that session. The ambient port and headed
+# overrides are cleared so the probe can neither collide with a live session's
+# bridge port nor open a visible window; every other setting stays as workers
+# inherit it. The verdict is the open command's exit status. The bridge detaches
+# into its own process group beyond fm_run_timed's reach, so the bounded stop
+# runs whether or not the open succeeded. The stop bound is a fixed 15s, and
+# the open bound is capped to leave that 15s inside the deferred network
+# stage's own FM_STARTUP_NETWORK_TIMEOUT budget (default 120s): otherwise a
+# short outer deadline could end the stage before it reaches this wait and
+# prints the buffered result, reporting a generic NETWORK_CHECKS timeout
+# instead of the actual browser-launch finding. A stop that fails or hits its
+# bound is reported rather than discarded - the bridge can outlive the timed
+# command, so a probe browser may still be running under the per-home probe
+# session named in that line.
+# This probe only proves that bootstrap's OWN process can launch a browser; it
+# is a proxy for a spawned worker's launch, not that launch itself. A worker's
+# destination pane can carry a different PATH, or (when config/launch-env-allowlist
+# is present) drop a CHROME_DEVTOOLS_AXI_* setting the allowlist omits, so a
+# probe that passes here can still leave a worker unable to open a browser.
+# See the BROWSER_UNAVAILABLE and "Missing-tool diagnostics" wording for the
+# caveat surfaced to the captain; matching that filtering exactly is future work.
+browser_probe_stop_bound() { echo 15; }
+
+browser_probe_timeout() {
+  local requested budget cap
+  case "${FM_BROWSER_PROBE_TIMEOUT:-}" in
+    ''|*[!0-9]*|0) requested=45 ;;
+    *) requested=$FM_BROWSER_PROBE_TIMEOUT ;;
+  esac
+  case "${FM_STARTUP_NETWORK_TIMEOUT:-}" in
+    ''|*[!0-9]*|0) budget=120 ;;
+    *) budget=$FM_STARTUP_NETWORK_TIMEOUT ;;
+  esac
+  cap=$(( budget - $(browser_probe_stop_bound) ))
+  [ "$cap" -ge 1 ] || cap=1
+  [ "$requested" -le "$cap" ] || requested=$cap
+  echo "$requested"
+}
+
+browser_launch_probe() {
+  local session timeout stop_timeout out rc reason stop_rc stop_reason
+  command -v chrome-devtools-axi >/dev/null 2>&1 || return 0
+  session="fm-bootstrap-probe-$(printf '%s' "$FM_HOME" | cksum | cut -d' ' -f1)"
+  timeout=$(browser_probe_timeout)
+  stop_timeout=$(browser_probe_stop_bound)
+  out=$(fm_run_timed "$timeout" env -u CHROME_DEVTOOLS_AXI_PORT -u CHROME_DEVTOOLS_AXI_HEADED \
+    CHROME_DEVTOOLS_AXI_SESSION="$session" \
+    chrome-devtools-axi open 'data:text/html,<title>fm-bootstrap-probe</title>ok' 2>&1)
+  rc=$?
+  fm_run_timed "$stop_timeout" env -u CHROME_DEVTOOLS_AXI_PORT CHROME_DEVTOOLS_AXI_SESSION="$session" \
+    chrome-devtools-axi stop >/dev/null 2>&1
+  stop_rc=$?
+  if [ "$rc" -ne 0 ]; then
+    if fm_timed_out "$rc"; then
+      reason="no page opened within ${timeout}s"
+    else
+      reason=$(printf '%s\n' "$out" | sed -n 's/^error: *//p' | head -n 1 | tr -d '"' | sed 's/\\n/ /g' | tr -s ' ' | cut -c1-200)
+      [ -n "$reason" ] || reason="open exited $rc"
+    fi
+    echo "BROWSER_UNAVAILABLE: chrome-devtools-axi cannot launch a browser ($reason) - workers cannot verify UI behavior in a browser; other work may proceed; configure a launchable browser and rerun bootstrap before relying on browser verification; this probe checks bootstrap's own environment as a proxy, not a spawned worker's actual environment, so a worker on a different PATH or a stricter config/launch-env-allowlist can still fail even when this probe succeeds"
+  fi
+  if [ "$stop_rc" -ne 0 ]; then
+    if fm_timed_out "$stop_rc"; then
+      stop_reason="did not stop within ${stop_timeout}s"
+    else
+      stop_reason="stop exited $stop_rc"
+    fi
+    echo "BROWSER_PROBE_CLEANUP: chrome-devtools-axi $stop_reason for probe session $session - a probe browser may still be running under it; run CHROME_DEVTOOLS_AXI_SESSION=$session chrome-devtools-axi stop to confirm cleanup"
+  fi
+  return 0
+}
+
 detect_local_config() {
   # Worktree-tangle check: the firstmate primary checkout (FM_ROOT) must sit on its
   # default branch, not a feature branch (see fm-tangle-lib.sh). Scoped to the
@@ -1637,6 +1644,27 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
       fm_timing_record phase fleet-sync "$__fm_timing_stamp"
     fi
   fi
+  # The browser probe launches a real browser for up to its own bound, so it
+  # rides the deferred stage off the digest's blocking path and overlaps the
+  # sweeps below. It runs only under fleet-lock ownership, so a read-only second
+  # session never races the lock holder's probe for the same per-home session.
+  browser_probe_pid=
+  browser_probe_out=
+  if network_phase && network_sweep_authorized 'browser launch probe'; then
+    browser_probe_out=$(mktemp "${TMPDIR:-/tmp}/fm-bootstrap-browser.XXXXXX") || browser_probe_out=
+    if [ -n "$browser_probe_out" ]; then
+      (
+        __fm_timing_stamp=$(fm_timing_now_ms)
+        browser_launch_probe
+        fm_timing_record phase browser-probe "$__fm_timing_stamp"
+      ) >"$browser_probe_out" 2>&1 &
+      browser_probe_pid=$!
+    else
+      __fm_timing_stamp=$(fm_timing_now_ms)
+      browser_launch_probe
+      fm_timing_record phase browser-probe "$__fm_timing_stamp"
+    fi
+  fi
   if network_phase; then
     if network_sweep_authorized 'dead-secondmate relaunch'; then
       __fm_timing_stamp=$(fm_timing_now_ms)
@@ -1667,6 +1695,11 @@ if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
     wait "$fleet_sync_pid" || true
     cat "$fleet_sync_out"
     rm -f "$fleet_sync_out"
+  fi
+  if [ -n "$browser_probe_pid" ]; then
+    wait "$browser_probe_pid" || true
+    cat "$browser_probe_out"
+    rm -f "$browser_probe_out"
   fi
 fi
 local_phase && secondmate_handoff_detect

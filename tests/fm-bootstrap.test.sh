@@ -17,6 +17,8 @@
 # Dedicated fleet-sync cases pin the computed bootstrap timeout, explicit
 # override, blank-env defaulting, partial-output relay, and pre-launch timeout
 # scan.
+# A dedicated browser-probe case pins the chrome-devtools-axi launch check:
+# its BROWSER_UNAVAILABLE line, its own session, its bound, and its phase.
 # Dedicated network-phase cases pin FM_BOOTSTRAP_NETWORK as a true partition of
 # one run into its local and network halves, and the one-hop tasks-axi
 # compatibility handoff that keeps a session start from paying for that verdict
@@ -45,7 +47,7 @@ make_fake_toolchain() {
   local dir=$1 fakebin
   fakebin=$(fm_fakebin "$dir")
   fm_fake_exit0 "$fakebin" tmux node chrome-devtools-axi
-  fm_fake_version_tool "$fakebin" lavish-axi FM_FAKE_LAVISH_AXI_VERSION 0.1.46
+  fm_fake_version_tool "$fakebin" lavish-axi FM_FAKE_LAVISH_AXI_VERSION 0.1.77
   cat > "$fakebin/gh-axi" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = --version ]; then
@@ -85,7 +87,7 @@ fi
 exit 0
 SH
   chmod +x "$fakebin/no-mistakes"
-  add_tasks_axi "$fakebin" "0.2.4"
+  add_tasks_axi "$fakebin" "0.2.6"
   add_quota_axi "$fakebin"
   printf '%s\n' "$fakebin"
 }
@@ -95,7 +97,7 @@ add_quota_axi() {
   cat > "$fakebin/quota-axi" <<'SH'
 #!/usr/bin/env bash
 if [ "${1:-}" = --version ]; then
-  printf '%s\n' "${FM_FAKE_QUOTA_AXI_VERSION:-0.1.29}"
+  printf '%s\n' "${FM_FAKE_QUOTA_AXI_VERSION:-0.1.51}"
   exit 0
 fi
 exit 0
@@ -304,16 +306,16 @@ test_bootstrap_reporting() {
         ;;
     esac
   done <<'ROWS'
-treehouse --lease support is accepted silently^1^0.2.4^1^manual^empty^^
-treehouse without --lease reports an upgrade, gh auth is fine^0^0.2.4^1^-^grep^MISSING: treehouse (install: curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh)^NEEDS_GH_AUTH
-compatible tasks-axi is silent by default^1^0.2.4^1^-^empty^^
+treehouse --lease support is accepted silently^1^0.2.6^1^manual^empty^^
+treehouse without --lease reports an upgrade, gh auth is fine^0^0.2.6^1^-^grep^MISSING: treehouse (install: curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh)^NEEDS_GH_AUTH
+compatible tasks-axi is silent by default^1^0.2.6^1^-^empty^^
 missing tasks-axi is required by default^1^-^1^-^exact^MISSING: tasks-axi (install: npm install -g tasks-axi)^
 incompatible tasks-axi is required by default^1^0.1.0^1^-^exact^MISSING: tasks-axi (install: npm install -g tasks-axi)^
-tasks-axi without archive-body is required by default^1^0.2.4:noarchive^1^-^exact^MISSING: tasks-axi (install: npm install -g tasks-axi)^
-tasks-axi without multi-id mv is required by default^1^0.2.4:nomulti^1^-^exact^MISSING: tasks-axi (install: npm install -g tasks-axi)^
-missing quota-axi is required by default^1^0.2.4^0^manual^exact^MISSING: quota-axi (install: npm install -g quota-axi)^
+tasks-axi without archive-body is required by default^1^0.2.6:noarchive^1^-^exact^MISSING: tasks-axi (install: npm install -g tasks-axi)^
+tasks-axi without multi-id mv is required by default^1^0.2.6:nomulti^1^-^exact^MISSING: tasks-axi (install: npm install -g tasks-axi)^
+missing quota-axi is required by default^1^0.2.6^0^manual^exact^MISSING: quota-axi (install: npm install -g quota-axi)^
 manual backlog backend still requires missing tasks-axi^1^-^1^manual^exact^MISSING: tasks-axi (install: npm install -g tasks-axi)^
-manual backlog backend suppresses tasks-axi availability^1^0.2.4^1^manual^empty^^
+manual backlog backend suppresses tasks-axi availability^1^0.2.6^1^manual^empty^^
 ROWS
   pass "bootstrap reports treehouse lease + tasks-axi/quota-axi bootstrap contracts"
 }
@@ -381,7 +383,7 @@ ROWS
 
 test_lavish_axi_min_version() {
   local label version mode case_dir fakebin out unavailable n
-  unavailable='PRESENTATION_UNAVAILABLE: lavish-axi (requires >=0.1.46; install: npm install -g lavish-axi && lavish-axi setup hooks) - nonvisual work may proceed with plain-text decisions and reports; install or upgrade before using Lavish'
+  unavailable='PRESENTATION_UNAVAILABLE: lavish-axi (requires >=0.1.77; install: npm install -g lavish-axi && lavish-axi setup hooks) - nonvisual work may proceed with plain-text decisions and reports; install or upgrade before using Lavish'
   n=0
   while IFS='^' read -r label version mode; do
     [ -n "$label" ] || continue
@@ -403,11 +405,11 @@ test_lavish_axi_min_version() {
     esac
   done <<'ROWS'
 absent lavish-axi permits text fallback^absent^unavailable
-minimum lavish-axi version is accepted^0.1.46^empty
-newer lavish-axi patch is accepted^0.1.47^empty
+minimum lavish-axi version is accepted^0.1.77^empty
+newer lavish-axi patch is accepted^0.1.78^empty
 newer lavish-axi minor is accepted^0.2.0^empty
 newer lavish-axi major is accepted^1.0.0^empty
-the patch just below the floor permits text fallback^0.1.45^unavailable
+the patch just below the floor permits text fallback^0.1.76^unavailable
 much older lavish-axi minor permits text fallback^0.0.9^unavailable
 unparseable lavish-axi version permits text fallback^lavish-axi development build^unavailable
 ROWS
@@ -449,15 +451,15 @@ test_tasks_axi_min_version() {
         [ "$out" = "$missing" ] || fail "$label: expected '$missing', got: $out" ;;
     esac
   done <<'ROWS'
-minimum tasks-axi version is accepted^0.2.4^empty
-newer tasks-axi patch is accepted^0.2.5^empty
+minimum tasks-axi version is accepted^0.2.6^empty
+newer tasks-axi patch is accepted^0.2.7^empty
 newer tasks-axi minor is accepted^0.3.0^empty
 newer tasks-axi major is accepted^1.0.0^empty
 older tasks-axi with features reports an upgrade^0.1.1^missing
-the patch just below the floor reports an upgrade^0.2.3^missing
+the patch just below the floor reports an upgrade^0.2.5^missing
 unparseable tasks-axi version reports an upgrade^tasks-axi development build^missing
-tasks-axi at floor without archive-body reports an upgrade^0.2.4:noarchive^missing
-tasks-axi at floor without multi-id reports an upgrade^0.2.4:nomulti^missing
+tasks-axi at floor without archive-body reports an upgrade^0.2.6:noarchive^missing
+tasks-axi at floor without multi-id reports an upgrade^0.2.6:nomulti^missing
 ROWS
   pass "bootstrap enforces tasks-axi minimum version"
 }
@@ -484,11 +486,11 @@ test_quota_axi_min_version() {
         [ "$out" = "$missing" ] || fail "$label: expected '$missing', got: $out" ;;
     esac
   done <<'ROWS'
-minimum quota-axi version is accepted^0.1.29^empty
-newer quota-axi patch is accepted^0.1.30^empty
+minimum quota-axi version is accepted^0.1.51^empty
+newer quota-axi patch is accepted^0.1.52^empty
 newer quota-axi minor is accepted^0.2.0^empty
 newer quota-axi major is accepted^1.0.0^empty
-the patch just below the floor reports an upgrade^0.1.28^missing
+the patch just below the floor reports an upgrade^0.1.50^missing
 much older quota-axi minor reports an upgrade^0.0.9^missing
 unparseable quota-axi version reports an upgrade^quota-axi development build^missing
 ROWS
@@ -1163,6 +1165,8 @@ empty array use is flagged^{"rules":[{"when":"big feature","use":[]}]}^exact^CRE
 array profile without harness is flagged^{"rules":[{"when":"big feature","use":[{"model":"gpt-5.5"}]}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - each use profile needs harness
 array profile with malformed model is flagged^{"rules":[{"when":"big feature","use":[{"harness":"codex","model":5}]}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - use profile model and effort must be non-empty strings, and provider must match ^[a-z0-9]+(-[a-z0-9]+)*\z when present
 resolve fields are accepted^{"rules":[{"when":"hard design","approval":"captain","floor":{"scope":"model:fable","min_percent":20,"provider":"claude"},"use":[{"harness":"pi","model":"openai-codex/gpt-5.6-sol","provider":"codex"},{"harness":"codex","model":"gpt-5.6-sol","floor":{"scope":"all_models","min_percent":50}}]}],"default":[{"harness":"pi","model":"kimi-code/k3","provider":"kimi","floor":{"scope":"all_models","min_percent":10}}]}^empty^
+rule min_confidence is accepted^{"rules":[{"when":"hard design","min_confidence":0.9,"use":{"harness":"claude"}}]}^empty^
+rule min_confidence out of range is flagged^{"rules":[{"when":"hard design","min_confidence":1.2,"use":{"harness":"claude"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - min_confidence must be a number from 0 through 1 when present
 non-captain approval is flagged^{"rules":[{"when":"hard design","approval":"firstmate","use":{"harness":"claude"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - approval must be "captain" when present
 rule floor without provider is flagged^{"rules":[{"when":"hard design","floor":{"scope":"model:fable","min_percent":20},"use":{"harness":"claude"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - rule floor needs scope, min_percent 0..100, and provider matching ^[a-z0-9]+(-[a-z0-9]+)*\z
 rule floor uppercase provider is flagged^{"rules":[{"when":"hard design","floor":{"scope":"model:fable","min_percent":20,"provider":"CLAUDE"},"use":{"harness":"claude"}}]}^exact^CREW_DISPATCH: invalid config/crew-dispatch.json - rule floor needs scope, min_percent 0..100, and provider matching ^[a-z0-9]+(-[a-z0-9]+)*\z
@@ -1211,6 +1215,10 @@ ROWS
     || fail "typed .env key must activate resolver-field validation, got: $out"
 
   rm -f "$case_dir/home/.env"
+  printf '%s\n' '{"default":{"harness":"devin","model":"swe-2-medium"}}' > "$case_dir/home/config/crew-dispatch.json"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  [ -z "$out" ] || fail "no-key bootstrap must accept the verified devin worker adapter, got: $out"
   printf '%s\n' '{"rules":[{"when":"gemini work","use":{"harness":"gemini","model":"gemini-3.8-flash-high","provider":"google"}}]}' > "$case_dir/home/config/crew-dispatch.json"
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
     FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
@@ -1231,6 +1239,158 @@ ROWS
   [ -n "$child_env" ] || fail "bootstrap child environment probe did not run"
   assert_not_contains "$child_env" 'secret-present' "bootstrap children never inherit the typesafe key"
   pass "bootstrap gates resolver fields and additive harnesses on the typed key"
+}
+
+# A chrome-devtools-axi stub that records each call's command and the browser
+# settings it saw, then behaves per FM_FAKE_BROWSER: ok opens, fail prints the
+# tool's own launch error, hang never returns from open, stopfail makes `stop`
+# itself fail, hangstop makes `stop` never return.
+add_browser_probe_stub() {
+  local fakebin=$1
+  cat > "$fakebin/chrome-devtools-axi" <<'SH'
+#!/usr/bin/env bash
+printf '%s session=%s port=%s headed=%s\n' "${1:-}" "${CHROME_DEVTOOLS_AXI_SESSION:-}" \
+  "${CHROME_DEVTOOLS_AXI_PORT:-unset}" "${CHROME_DEVTOOLS_AXI_HEADED:-unset}" >> "$FM_FAKE_BROWSER_LOG"
+if [ "${1:-}" = stop ]; then
+  case "${FM_FAKE_BROWSER:-ok}" in
+    stopfail) exit 1 ;;
+    hangstop) exec perl -e 'sleep 30' ;;
+  esac
+  exit 0
+fi
+[ "${1:-}" = open ] || exit 0
+case "${FM_FAKE_BROWSER:-ok}" in
+  ok|stopfail|hangstop) printf '%s\n' 'page:' '  title: fm-bootstrap-probe' ;;
+  fail)
+    printf '%s\n' 'error: "Could not find Google Chrome executable for channel '"'"'stable'"'"' at:\n - /opt/google/chrome/chrome."' 'code: UNKNOWN'
+    exit 1 ;;
+  hang) exec perl -e 'sleep 30' ;;
+esac
+SH
+  chmod +x "$fakebin/chrome-devtools-axi"
+}
+
+test_browser_launch_probe() {
+  local case_dir fakebin log out start elapsed mode
+  case_dir="$TMP_ROOT/browser-probe"
+  mkdir -p "$case_dir/home/config"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  add_browser_probe_stub "$fakebin"
+  log="$case_dir/browser.log"
+
+  run_probe_case() {  # <FM_FAKE_BROWSER> [VAR=value...]
+    mode=$1
+    shift
+    : > "$log"
+    out=$(env PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+      FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_FAKE_BROWSER="$mode" FM_FAKE_BROWSER_LOG="$log" \
+      CHROME_DEVTOOLS_AXI_SESSION=worker-1 CHROME_DEVTOOLS_AXI_PORT=9224 CHROME_DEVTOOLS_AXI_HEADED=1 \
+      "$@" "$ROOT/bin/fm-bootstrap.sh")
+  }
+
+  run_probe_case ok
+  [ -z "$out" ] || fail "a launchable browser must keep bootstrap silent, got: $out"
+  grep -q '^open session=fm-bootstrap-probe-[0-9][0-9]* port=unset headed=unset$' "$log" \
+    || fail "the probe must open headless under its own session and a name-derived port: $(cat "$log")"
+  grep -q '^stop session=fm-bootstrap-probe-[0-9][0-9]* port=unset' "$log" \
+    || fail "the probe must stop its session: $(cat "$log")"
+  assert_no_grep 'session=worker-1' "$log" "the probe touched the ambient worker session"
+
+  run_probe_case fail
+  [ "$out" = "BROWSER_UNAVAILABLE: chrome-devtools-axi cannot launch a browser (Could not find Google Chrome executable for channel 'stable' at: - /opt/google/chrome/chrome.) - workers cannot verify UI behavior in a browser; other work may proceed; configure a launchable browser and rerun bootstrap before relying on browser verification; this probe checks bootstrap's own environment as a proxy, not a spawned worker's actual environment, so a worker on a different PATH or a stricter config/launch-env-allowlist can still fail even when this probe succeeds" ] \
+    || fail "an unlaunchable browser must report its launch error, got: $out"
+  grep -q '^stop session=fm-bootstrap-probe-' "$log" || fail "a failed open must still stop the probe session"
+
+  start=$(date +%s)
+  run_probe_case hang FM_BROWSER_PROBE_TIMEOUT=1
+  elapsed=$(( $(date +%s) - start ))
+  [ "$elapsed" -lt 20 ] || fail "a hung browser stalled bootstrap for ${elapsed}s"
+  assert_contains "$out" 'BROWSER_UNAVAILABLE: chrome-devtools-axi cannot launch a browser (no page opened within 1s)' \
+    "a hung browser must report the bound it hit"
+  grep -q '^stop session=fm-bootstrap-probe-' "$log" || fail "a timed-out open must still stop the probe session"
+
+  run_probe_case fail FM_BOOTSTRAP_DETECT_ONLY=1
+  [ ! -s "$log" ] || fail "a read-only session must leave browser launch to the lock holder: $(cat "$log")"
+  run_probe_case fail FM_BOOTSTRAP_NETWORK=skip
+  [ ! -s "$log" ] || fail "the blocking local phase must not launch a browser: $(cat "$log")"
+  run_probe_case fail FM_BOOTSTRAP_NETWORK=only
+  assert_contains "$out" 'BROWSER_UNAVAILABLE:' "the deferred phase must carry the browser probe"
+
+  rm -f "$fakebin/chrome-devtools-axi"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  assert_contains "$out" 'MISSING: chrome-devtools-axi (install:' "an absent tool must still report MISSING"
+  assert_not_contains "$out" 'BROWSER_UNAVAILABLE' "an absent tool must not also report a launch failure"
+  pass "bootstrap proves chrome-devtools-axi can launch a browser, bounded and off the blocking path"
+}
+
+# The probe's open bound must be capped so it plus the fixed 15s stop bound can
+# never exceed the deferred network stage's own FM_STARTUP_NETWORK_TIMEOUT
+# budget - otherwise a short outer deadline could end the stage before it ever
+# prints the probe's buffered BROWSER_UNAVAILABLE finding.
+test_browser_launch_probe_timeout_capped_to_network_budget() {
+  local case_dir fakebin log out start elapsed
+  case_dir="$TMP_ROOT/browser-probe-budget-cap"
+  mkdir -p "$case_dir/home/config"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  add_browser_probe_stub "$fakebin"
+  log="$case_dir/browser.log"
+
+  : > "$log"
+  start=$(date +%s)
+  out=$(env PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_FAKE_BROWSER=hang FM_FAKE_BROWSER_LOG="$log" \
+    FM_BROWSER_PROBE_TIMEOUT=200 FM_STARTUP_NETWORK_TIMEOUT=20 \
+    "$ROOT/bin/fm-bootstrap.sh")
+  elapsed=$(( $(date +%s) - start ))
+  [ "$elapsed" -lt 20 ] || fail "an outer-budget-capped probe stalled bootstrap for ${elapsed}s"
+  assert_contains "$out" 'BROWSER_UNAVAILABLE: chrome-devtools-axi cannot launch a browser (no page opened within 5s)' \
+    "a requested bound (200s) bigger than the stage budget (20s) minus the fixed 15s stop bound must be capped to 5s"
+
+  : > "$log"
+  start=$(date +%s)
+  out=$(env PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_FAKE_BROWSER=hang FM_FAKE_BROWSER_LOG="$log" \
+    FM_BROWSER_PROBE_TIMEOUT=200 FM_STARTUP_NETWORK_TIMEOUT=5 \
+    "$ROOT/bin/fm-bootstrap.sh")
+  elapsed=$(( $(date +%s) - start ))
+  [ "$elapsed" -lt 20 ] || fail "a budget smaller than the fixed stop bound stalled bootstrap for ${elapsed}s"
+  assert_contains "$out" 'BROWSER_UNAVAILABLE: chrome-devtools-axi cannot launch a browser (no page opened within 1s)' \
+    "a budget (5s) smaller than the fixed 15s stop bound must still floor the open bound at 1s, never 0 or negative"
+
+  pass "the browser probe's open bound is capped so it plus the fixed stop bound never exceeds FM_STARTUP_NETWORK_TIMEOUT"
+}
+
+# A stop that fails or hits its bound must be reported, not discarded: the
+# bridge can outlive the timed command and leave a probe browser running.
+test_browser_launch_probe_stop_failure_reported() {
+  local case_dir fakebin log out
+  case_dir="$TMP_ROOT/browser-probe-stop-failure"
+  mkdir -p "$case_dir/home/config"
+  printf '%s\n' manual > "$case_dir/home/config/backlog-backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  add_browser_probe_stub "$fakebin"
+  log="$case_dir/browser.log"
+
+  : > "$log"
+  out=$(env PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_FAKE_BROWSER=stopfail FM_FAKE_BROWSER_LOG="$log" \
+    "$ROOT/bin/fm-bootstrap.sh")
+  assert_not_contains "$out" 'BROWSER_UNAVAILABLE' "a launchable browser must not also report a launch failure"
+  assert_contains "$out" 'BROWSER_PROBE_CLEANUP: chrome-devtools-axi stop exited 1' \
+    "a failed stop must be reported, not discarded"
+  assert_contains "$out" 'fm-bootstrap-probe-' "the cleanup line must name the per-home probe session"
+
+  : > "$log"
+  out=$(env PATH="$fakebin:$BASE_PATH" FM_HOME="$case_dir/home" FM_ROOT_OVERRIDE="$case_dir/home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_FAKE_BROWSER=hangstop FM_FAKE_BROWSER_LOG="$log" \
+    "$ROOT/bin/fm-bootstrap.sh")
+  assert_contains "$out" 'BROWSER_PROBE_CLEANUP: chrome-devtools-axi did not stop within 15s' \
+    "a stop that hits its bound must be reported with the bound it hit"
+
+  pass "the browser probe reports a failed or timed-out cleanup instead of discarding it"
 }
 
 test_bootstrap_reporting
@@ -1261,3 +1421,6 @@ test_network_phases_record_per_step_elapsed_times
 test_tasks_axi_verdict_handoff_is_consumed_once
 test_crew_dispatch_active_rules_are_verbose_bootstrap_info
 test_crew_dispatch_validation
+test_browser_launch_probe
+test_browser_launch_probe_timeout_capped_to_network_budget
+test_browser_launch_probe_stop_failure_reported

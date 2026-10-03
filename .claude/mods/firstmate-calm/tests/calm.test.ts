@@ -4,6 +4,7 @@ import { describe, expect, test, type Engine } from "claude-code/testing";
 import {
   assistantMessage,
   calmCommand,
+  doorbell,
   fromFirstmate,
   HOME,
   isHidden,
@@ -21,13 +22,13 @@ import {
 const sessionStart = { cwd: "/work", surface: "terminal" as const, isInteractive: true };
 
 describe("activation", () => {
-  async function expectInert($: Engine, on: Parameters<typeof world>[0], functionHooks: string | undefined) {
+  async function expectOffPassThrough($: Engine, on: Parameters<typeof world>[0], options: Parameters<typeof world>[1]) {
     const { clock, journal } = world(on, {
-      functionHooks,
-      preference: "on\n",
+      ...options,
       messages: [{ role: "assistant", text: "Working", toolUses: [{ name: "Bash" }] }],
     });
     await $.session.start(sessionStart);
+    expect(journal.commands).toEqual(["calm"]);
     const drawings = await Promise.all([
       $.ui.render(spinner()),
       $.ui.render(toolUse()),
@@ -38,36 +39,56 @@ describe("activation", () => {
     ]);
     expect(drawings.every(isStock)).toBe(true);
     await clock.advance(220 * 8);
-    expect(journal.commands).toHaveLength(0);
     expect(journal.blits).toHaveLength(0);
     expect(journal.invalidations).toHaveLength(0);
     expect(journal.toasts).toHaveLength(0);
-    expect(journal.fsReads).toHaveLength(0);
+    expect(journal.fsReads).toEqual([PREFERENCE]);
     expect(journal.sessionMessageReads).toBe(0);
     expect(journal.configLists).toBe(0);
   }
 
-  test("is fully inert when the function-hooks opt-in is absent", async ($, on) => {
-    await expectInert($, on, undefined);
+  test("registers /calm and otherwise stays a pass-through while no preference is stored", async ($, on) => {
+    await expectOffPassThrough($, on, {});
   });
 
-  test("is fully inert when the function-hooks opt-in is not exactly one", async ($, on) => {
-    await expectInert($, on, "true");
+  test("registers /calm and otherwise stays a pass-through while the preference is off", async ($, on) => {
+    await expectOffPassThrough($, on, { preference: "off\n" });
   });
 
-  test("registers /calm at session start and stays a pass-through while off", async ($, on) => {
-    const { clock, journal } = world(on);
+  test("ignores CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: the variable neither turns Calm on nor holds it off", async ($, on) => {
+    await expectOffPassThrough($, on, { env: { CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: "1" } });
+  });
+
+  test("follows a stored on even with CLAUDE_CODE_ENABLE_FUNCTION_HOOKS set to zero", async ($, on) => {
+    world(on, { preference: "on\n", env: { CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: "0" } });
     await $.session.start(sessionStart);
-    expect(journal.commands).toEqual(["calm"]);
-    expect(isStock(await $.ui.render(spinner()))).toBe(true);
+    expect(isHidden(await $.ui.render(toolUse()))).toBe(true);
+  });
+
+  test("reads the restored transcript only once Calm turns on, then hides its narration", async ($, on) => {
+    const { journal } = world(on, {
+      messages: [
+        { role: "user", text: "do it", toolUses: [] },
+        { role: "assistant", text: "Restored narration", toolUses: [{ name: "Bash" }] },
+      ],
+    });
+    await $.session.start(sessionStart);
+    expect(isStock(await $.ui.render(assistantMessage("Restored narration")))).toBe(true);
+    expect(journal.sessionMessageReads).toBe(0);
+    await $.command.run(calmCommand());
+    expect(journal.sessionMessageReads).toBe(1);
+    expect(isHidden(await $.ui.render(assistantMessage("Restored narration")))).toBe(true);
+  });
+
+  test("redraws the rows the previous session hid when a new session loads off", async ($, on) => {
+    const { files, journal } = world(on, { preference: "on\n" });
+    await $.session.start(sessionStart);
+    expect(isHidden(await $.ui.render(toolUse()))).toBe(true);
+    files.set(PREFERENCE, "off\n");
+    const redrawsBefore = journal.invalidations.length;
+    await $.session.start(sessionStart);
+    expect(journal.invalidations.length).toBe(redrawsBefore + 1);
     expect(isStock(await $.ui.render(toolUse()))).toBe(true);
-    expect(isStock(await $.ui.render(toolResult()))).toBe(true);
-    expect(isStock(await $.ui.render(toolGroup()))).toBe(true);
-    expect(isStock(await $.ui.render(userMessage(operational("watcher", "signal: x"))))).toBe(true);
-    expect(isStock(await $.ui.render(assistantMessage("hello")))).toBe(true);
-    await clock.advance(220 * 8);
-    expect(journal.blits).toHaveLength(0);
-    expect(journal.toasts).toHaveLength(0);
   });
 
   test("reads a persisted on before session start, so restored rows never draw with a stale off", async ($, on) => {
@@ -201,6 +222,45 @@ describe("operational user rows", () => {
     for (const text of [...hiddenTexts, ...visibleTexts]) {
       expect(isStock(await $.ui.render(userMessage(text))), JSON.stringify(text)).toBe(true);
     }
+  });
+
+  // A harness that strips U+2063 from submitted prompts receives a plain doorbell naming
+  // a record that holds the envelope; only the record makes the row Firstmate's.
+  const inbox = `${HOME}/state/operational-inbox`;
+  const backed = `${inbox}/1790000000-0123456789abcdef.msg`;
+  const unbacked = `${inbox}/1790000000-fedcba9876543210.msg`;
+  const asciiRecord = `${inbox}/1790000000-aaaaaaaaaaaaaaaa.msg`;
+
+  test("hides a doorbell only when the record it names holds a current envelope", async ($, on) => {
+    const { files, journal } = world(on, { preference: "on\n" });
+    files.set(backed, operational("away-supervisor", "Supervisor escalate: done: PR 1"));
+    files.set(asciiRecord, "FIRSTMATE_OP: v1 away-supervisor: ascii only");
+    expect(isHidden(await $.ui.render(userMessage(doorbell(backed))))).toBe(true);
+    expect(isStock(await $.ui.render(userMessage(doorbell(unbacked))))).toBe(true);
+    expect(isStock(await $.ui.render(userMessage(doorbell(asciiRecord))))).toBe(true);
+    expect(isStock(await $.ui.render(userMessage(`${doorbell(backed)} and more`)))).toBe(true);
+    expect(isStock(await $.ui.render(userMessage(doorbell("relative/operational-inbox/1-a.msg"))))).toBe(true);
+    // Records are immutable once published, so one read serves every redraw of the row.
+    const readsBefore = journal.fsReads.filter((path) => path === backed).length;
+    expect(isHidden(await $.ui.render(userMessage(doorbell(backed))))).toBe(true);
+    expect(journal.fsReads.filter((path) => path === backed).length).toBe(readsBefore);
+  });
+
+  test("shows a hidden doorbell again once a toggle redraws it after its record is pruned", async ($, on) => {
+    const { files } = world(on, { preference: "on\n" });
+    files.set(backed, operational("away-supervisor", "escalate"));
+    expect(isHidden(await $.ui.render(userMessage(doorbell(backed))))).toBe(true);
+    files.delete(backed);
+    await $.command.run(calmCommand());
+    await $.command.run(calmCommand());
+    expect(isStock(await $.ui.render(userMessage(doorbell(backed))))).toBe(true);
+  });
+
+  test("leaves a backed doorbell to the engine while off, without reading its record", async ($, on) => {
+    const { files, journal } = world(on);
+    files.set(backed, operational("away-supervisor", "escalate"));
+    expect(isStock(await $.ui.render(userMessage(doorbell(backed))))).toBe(true);
+    expect(journal.fsReads).not.toContain(backed);
   });
 });
 

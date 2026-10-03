@@ -3,7 +3,7 @@ name: harness-adapters
 description: >-
   Agent-only reference for firstmate harness operations.
   Use before spawning or recovering a crewmate or secondmate, handling a trust dialog, sending a harness-specific skill invocation, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter.
-  Contains verified facts for claude, codex, opencode, pi, pi-signed, grok, kimi, cursor, gemini, muse, rovo, omp, and agy.
+  Contains verified facts for claude, codex, opencode, pi, pi-signed, grok, kimi, cursor, gemini, muse, rovo, omp, agy, and devin.
 user-invocable: false
 metadata:
   internal: true
@@ -35,7 +35,7 @@ For recovery and control, use the exact `harness=` in `state/<id>.meta`; never i
 Deliver lifecycle actions only through `../../../bin/fm-control.sh <task-id> interrupt|exit|relaunch`.
 Never type an interrupt key or exit command through `fm-send`, where routing-marked lifecycle text becomes chat.
 Trust handling is complete only when inspection proves the target started processing its instructions; delivery success alone is not proof.
-Muse, Gemini, and AGY are verified only for crewmate and scout work, never a secondmate or primary.
+Muse, Gemini, AGY, and Devin are verified only for crewmate and scout work, never a secondmate or primary.
 
 ## Detection
 
@@ -48,7 +48,6 @@ omp publishes no marker of its own; `FM_OMP_HARNESS=omp` is Firstmate's launch m
 `../../../bin/fm-harness.sh secondmate` resolves `config/secondmate-harness` -> `config/crew-harness` -> firstmate's own harness.
 `../../../bin/fm-spawn.sh` re-resolves on every spawn, and an explicit per-spawn argument wins for that spawn.
 A new adapter's verified marker and command name must land in `../../../bin/fm-harness.sh`.
-Verifying one also means observing, in a real child of a real session of that harness, whether it exports a launch marker naming its own session pid: `FM_SESSION_LAUNCH_MARKERS` in `../../../bin/fm-session-lock-lib.sh` has a verified row for Claude alone, and every other harness decides session-lock ownership by process ancestry until a row is verified for it, which [`runtime-backends.md`](../../../docs/verification/runtime-backends.md#session-lock-identity-and-the-suspended-holder) owns.
 
 ## Operation-to-reference matrix
 
@@ -96,7 +95,8 @@ A new tool remains undispatchable until the `verify` plan, its harness entry, ev
     "muse": "references/harness/muse.md",
     "rovo": "references/harness/rovo.md",
     "omp": "references/harness/omp.md",
-    "agy": "references/harness/agy.md"
+    "agy": "references/harness/agy.md",
+    "devin": "references/harness/devin.md"
   }
 }
 ```

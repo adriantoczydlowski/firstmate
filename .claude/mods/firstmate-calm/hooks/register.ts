@@ -1,9 +1,10 @@
 // Firstmate Calm for Claude Code: the hooks module of the `firstmate-calm` mod.
 //
 // A Claude Code "mod" is a plugin whose behavior lives in one hooks module. Claude Code
-// may load this module through its rollout flag or `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS`,
-// but every handler requires that environment variable to equal `1`, so rollout-only
-// loading remains a complete no-op.
+// 2.1.286 and later load it in every session of a trusted project and ignore
+// `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS`, so Calm's only switch is the per-home preference
+// `/calm` toggles: while that preference is off or absent the module registers `/calm`,
+// reads nothing but the preference, runs no timer, and returns every drawing to the engine.
 // The plugin carries no command, skill, agent, or classic hook of its own; the `/calm`
 // command below exists only once this module has registered it. docs/calm.md owns the
 // captain-facing contract and docs/calm-mode-feasibility.md the version-scoped evidence.
@@ -19,15 +20,19 @@
 // the stock working row (`Spinner`) becomes the two-row sailboat, repainted through
 // `$.ui.blit` on the sprite's own tick; `ToolUse`, `ToolResult`, and `ToolGroup` rows
 // draw as zero-height boxes; a `UserMessage` whose text the canonical operational-input
-// classifier recognizes draws as zero height; an `AssistantMessage` block recorded as a
-// mid-turn working note draws as zero height. Calm off returns every drawing to the
+// classifier recognizes, or a record-backed doorbell whose record holds a current
+// envelope (read through `$.fs.read`, cached until Calm next invalidates its drawings),
+// draws as zero height; an `AssistantMessage` block recorded as a mid-turn working note
+// draws as zero height. Calm off returns every drawing to the
 // engine. A toggle invalidates every hooked drawing, so rows already on screen redraw.
 // The boat is painted in Claude Code's own theme colors: the family is read from the
-// `theme` setting at load and re-read when a `config.set` changes it.
+// `theme` setting the first time Calm is on in a session and re-read when a `config.set` changes it.
 //
 // Loading is lazy and cached within a session: a resumed transcript or a hot reload can
 // draw restored rows before `session.start`, so every hook awaits that session's load of
-// the per-home preference and restored working notes rather than trusting a stale "off".
+// the per-home preference rather than trusting a stale "off". The theme and the restored
+// working notes are prepared only once Calm is on in that session; the ship's timer runs
+// only while Calm is on, stopping whenever it turns off and starting again when it turns on.
 // Each `session.start` clears presentation classifications and reloads the new session.
 import type { EngineInterface, Register, RenderElement, RenderInput } from "claude-code";
 import {
@@ -46,9 +51,11 @@ import {
   calmPreferencePath,
   parseCalmPreference,
   classifyRestoredTranscript,
+  recordIsOperational,
   serializeCalmPreference,
   stepTextIsWorkingNote,
   userTextIsOperational,
+  userTextOperationalRecord,
   workingNoteKey,
 } from "../lib/fm-calm-presentation.ts";
 
@@ -59,28 +66,21 @@ const CALM_COMMAND = "calm";
 // same as a new Pi extension lifetime.
 let calm = false;
 let preferencePath: string | undefined;
-let activation: Promise<boolean> | undefined;
 let loading: Promise<void> | undefined;
+let presenting: Promise<void> | undefined;
 let ticker: { cancel(): void } | undefined;
 const workingNotes = new Set<string>();
 const finalReplies = new Set<string>();
+// Each doorbell's record verdict, by record path. Records are immutable once published
+// but pruned after seven days, so every invalidation drops the cache and rechecks.
+const doorbellVerdicts = new Map<string, Promise<boolean>>();
 const sprite = createCalmWorkingShipSprite();
 let palette: CalmShipRasterPalette = CALM_SHIP_RASTER_PALETTES.light;
 // Every Spinner site currently drawing the boat, by its requestId, with the mounted
 // Raster size a blit must repeat exactly.
 const sites = new Map<string, { columns: number; rows: number }>();
 
-function isActivated($: EngineInterface): Promise<boolean> {
-  if (activation === undefined) {
-    activation = $.env.get("CLAUDE_CODE_ENABLE_FUNCTION_HOOKS").then(
-      (value) => value === "1",
-      () => false,
-    );
-  }
-  return activation;
-}
-
-async function readPreference($: EngineInterface, path: string): Promise<string | undefined> {
+async function readText($: EngineInterface, path: string): Promise<string | undefined> {
   try {
     return await $.fs.read(path);
   } catch {
@@ -106,7 +106,21 @@ async function load($: EngineInterface): Promise<void> {
     },
     $.plugin.root,
   );
-  calm = parseCalmPreference(await readPreference($, preferencePath));
+  if (parseCalmPreference(await readText($, preferencePath))) {
+    await ensurePresenting($);
+    calm = true;
+    startTicker($);
+    invalidateDrawings($);
+  }
+}
+
+function ensureLoaded($: EngineInterface): Promise<void> {
+  if (loading === undefined) loading = load($);
+  return loading;
+}
+
+/** What an active Calm draws from, once per session: the theme and restored notes. */
+async function present($: EngineInterface): Promise<void> {
   palette = CALM_SHIP_RASTER_PALETTES[calmShipPaletteFamily(await readTheme($))];
   try {
     const restored = classifyRestoredTranscript(await $.session.messages());
@@ -115,30 +129,50 @@ async function load($: EngineInterface): Promise<void> {
   } catch {
     // A transcript that cannot be read leaves restored narration visible; nothing else changes.
   }
-  if (ticker === undefined) {
-    ticker = $.clock.every(CALM_WORKING_SHIP_TICK_MS, () => {
-      void repaintShip($);
-    });
-  }
-  $.ui.invalidate("ui.render");
 }
 
-function ensureLoaded($: EngineInterface): Promise<void> {
-  if (loading === undefined) loading = load($);
-  return loading;
+function ensurePresenting($: EngineInterface): Promise<void> {
+  if (presenting === undefined) presenting = present($);
+  return presenting;
+}
+
+/** Start the ship's timer while Calm is on; a running timer is left as it is. */
+function startTicker($: EngineInterface): void {
+  if (ticker !== undefined) return;
+  ticker = $.clock.every(CALM_WORKING_SHIP_TICK_MS, () => {
+    void repaintShip($);
+  });
+}
+
+/** Stop the ship's timer and forget every site it repainted. */
+function stopTicker(): void {
+  ticker?.cancel();
+  ticker = undefined;
+  sites.clear();
 }
 
 async function resetSession($: EngineInterface): Promise<void> {
   if (loading !== undefined) await loading.catch(() => undefined);
+  const wasCalm = calm;
   calm = false;
   preferencePath = undefined;
   loading = undefined;
+  presenting = undefined;
+  stopTicker();
   workingNotes.clear();
   finalReplies.clear();
-  sites.clear();
+  doorbellVerdicts.clear();
   sprite.reset();
   palette = CALM_SHIP_RASTER_PALETTES.light;
   await ensureLoaded($);
+  // A session that loads off redraws only rows the previous session's Calm had changed.
+  if (wasCalm && !calm) invalidateDrawings($);
+}
+
+/** Redraw every hooked drawing, rechecking each doorbell's record on its next drawing. */
+function invalidateDrawings($: EngineInterface): void {
+  doorbellVerdicts.clear();
+  $.ui.invalidate("ui.render");
 }
 
 /** One scheduler tick: advance the sprite, then repaint every mounted boat in place. */
@@ -160,6 +194,18 @@ async function repaintShip($: EngineInterface): Promise<void> {
   }
 }
 
+/** Whether a user row is a record-backed doorbell whose record holds a current envelope. */
+function doorbellIsOperational($: EngineInterface, text: string): Promise<boolean> {
+  const record = userTextOperationalRecord(text);
+  if (record === undefined) return Promise.resolve(false);
+  let verdict = doorbellVerdicts.get(record);
+  if (verdict === undefined) {
+    verdict = readText($, record).then(recordIsOperational);
+    doorbellVerdicts.set(record, verdict);
+  }
+  return verdict;
+}
+
 /** A zero-height drawing: the row contributes nothing to the transcript's layout. */
 function hiddenRow($: EngineInterface, e: RenderInput): RenderElement {
   const { Box } = $.ui.resolve(e);
@@ -168,7 +214,6 @@ function hiddenRow($: EngineInterface, e: RenderInput): RenderElement {
 
 export const register: Register = (on) => {
   on("session.start", async ($, e, next) => {
-    if (!(await isActivated($))) return next(e);
     await resetSession($);
     await $.command.register({
       name: CALM_COMMAND,
@@ -177,8 +222,7 @@ export const register: Register = (on) => {
     return next(e);
   });
 
-  on("command.run", { command: CALM_COMMAND }, async ($, e, next) => {
-    if (!(await isActivated($))) return next(e);
+  on("command.run", { command: CALM_COMMAND }, async ($) => {
     await ensureLoaded($);
     const active = !calm;
     // Persist before changing live presentation, so a failed write leaves the current
@@ -190,9 +234,11 @@ export const register: Register = (on) => {
       $.ui.toast(`Calm unchanged: could not save ${preferencePath ?? "the preference"} (${reason})`);
       return {};
     }
+    if (active) await ensurePresenting($);
     calm = active;
-    if (!calm) sites.clear();
-    $.ui.invalidate("ui.render");
+    if (calm) startTicker($);
+    else stopTicker();
+    invalidateDrawings($);
     $.ui.toast(active ? "Calm on" : "Calm off");
     // No `text`: the toggle leaves no output row in the transcript, as on Pi.
     return {};
@@ -200,13 +246,12 @@ export const register: Register = (on) => {
 
   // Follow a theme change: the next drawing and every later blit use the new family.
   on("config.set", { key: "theme" }, async ($, e, next) => {
-    if (!(await isActivated($))) return next(e);
     const result = await next(e);
     if (result.deny === undefined) {
       const chosen = CALM_SHIP_RASTER_PALETTES[calmShipPaletteFamily(result.value)];
       if (chosen !== palette) {
         palette = chosen;
-        if (calm) $.ui.invalidate("ui.render");
+        if (calm) invalidateDrawings($);
       }
     }
     return result;
@@ -215,11 +260,6 @@ export const register: Register = (on) => {
   // Record mid-turn narration as it streams: the text blocks of a model step that
   // stopped to call tools. Subagent steps never draw in the main transcript.
   on("turn.step", async function* ($, e, next) {
-    if (!(await isActivated($))) {
-      const untouched = next(e);
-      for await (const chunk of untouched) yield chunk;
-      return await untouched.result;
-    }
     const stream = next(e);
     const blocks = new Map<number, string>();
     for await (const chunk of stream) {
@@ -244,13 +284,12 @@ export const register: Register = (on) => {
           if (workingNotes.delete(key)) changed = true;
         }
       }
-      if (changed && calm) $.ui.invalidate("ui.render");
+      if (changed && calm) invalidateDrawings($);
     }
     return result;
   });
 
   on("ui.render", { component: "Spinner" }, async ($, e, next) => {
-    if (!(await isActivated($))) return next(e);
     await ensureLoaded($);
     if (!calm || e.surface !== "terminal") {
       sites.delete(e.requestId);
@@ -267,29 +306,27 @@ export const register: Register = (on) => {
   });
 
   on("ui.render", { component: "ToolUse" }, async ($, e, next) => {
-    if (!(await isActivated($))) return next(e);
     await ensureLoaded($);
     return calm ? hiddenRow($, e) : next(e);
   });
   on("ui.render", { component: "ToolResult" }, async ($, e, next) => {
-    if (!(await isActivated($))) return next(e);
     await ensureLoaded($);
     return calm ? hiddenRow($, e) : next(e);
   });
   on("ui.render", { component: "ToolGroup" }, async ($, e, next) => {
-    if (!(await isActivated($))) return next(e);
     await ensureLoaded($);
     return calm ? hiddenRow($, e) : next(e);
   });
 
   on("ui.render", { component: "UserMessage" }, async ($, e, next) => {
-    if (!(await isActivated($))) return next(e);
     await ensureLoaded($);
-    return calm && userTextIsOperational(e.props.text) ? hiddenRow($, e) : next(e);
+    if (!calm) return next(e);
+    const operational =
+      userTextIsOperational(e.props.text) || (await doorbellIsOperational($, e.props.text));
+    return operational ? hiddenRow($, e) : next(e);
   });
 
   on("ui.render", { component: "AssistantMessage" }, async ($, e, next) => {
-    if (!(await isActivated($))) return next(e);
     await ensureLoaded($);
     const key = workingNoteKey(e.props.text);
     return calm && workingNotes.has(key) && !finalReplies.has(key) ? hiddenRow($, e) : next(e);

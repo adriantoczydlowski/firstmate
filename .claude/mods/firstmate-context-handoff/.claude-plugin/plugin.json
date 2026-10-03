@@ -1,0 +1,10 @@
+{
+  "name": "firstmate-context-handoff",
+  "version": "1.0.0",
+  "description": "Firstmate context handoff for Claude Code, main-window part: once a session has used 250k tokens of context and the per-home config/context-handoff switch is on, the captain's main window offers /stow and then a clear that carries the stow receipt into the fresh session, and a secondmate runs /stow itself. Ship and scout workers are served by firstmate-context-handoff-worker instead.",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "Firstmate",
+    "url": "https://github.com/kunchenguid/firstmate"
+  }
+}

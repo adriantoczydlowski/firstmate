@@ -2,7 +2,7 @@
 name: bootstrap-diagnostics
 description: >-
   Agent-only handling playbook for session-start bootstrap diagnostics.
-  Use whenever the session-start digest's bootstrap or network-checks section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, PRESENTATION_UNAVAILABLE, BACKEND_INVALID, NEEDS_GH_AUTH, TANGLE, STARTUP_MEMORY_BUDGET, CREW_DISPATCH invalid, FLEET_SYNC, NETWORK_CHECKS, HOME_SUMMARY, BACKLOG_RECONCILE, SECONDMATE_SYNC, SECONDMATE_LIVENESS, SECONDMATE_HANDOFF, NUDGE_SECONDMATES, or FMX - or reports that an interrupted backlog cleanup may have left an endpoint or local copy, or when a standalone bin/fm-bootstrap.sh or bin/fm-startup-network.sh run prints one of those lines.
+  Use whenever the session-start digest's bootstrap or network-checks section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, PRESENTATION_UNAVAILABLE, BROWSER_UNAVAILABLE, BROWSER_PROBE_CLEANUP, BACKEND_INVALID, NEEDS_GH_AUTH, TANGLE, STARTUP_MEMORY_BUDGET, CREW_DISPATCH invalid, FLEET_SYNC, NETWORK_CHECKS, HOME_SUMMARY, BACKLOG_RECONCILE, SECONDMATE_SYNC, SECONDMATE_LIVENESS, SECONDMATE_HANDOFF, NUDGE_SECONDMATES, or FMX - or reports that an interrupted backlog cleanup may have left an endpoint or local copy, or when a standalone bin/fm-bootstrap.sh or bin/fm-startup-network.sh run prints one of those lines.
   A silent bootstrap section, or any other BOOTSTRAP_INFO fact, means no skill load.
 user-invocable: false
 metadata:
@@ -13,7 +13,7 @@ metadata:
 
 Handle each printed line as below, before dispatching work that depends on it.
 The line formats themselves are owned by `bin/fm-bootstrap.sh`'s header; this playbook owns the response to actionable lines.
-The inline rules in `AGENTS.md` section 3 still bind: detect, then consent, then install - never install anything the captain has not approved in this session - and no work is dispatched until the tools it needs are present and GitHub auth is good.
+The session-start rules in `session-start-recovery` still bind: detect, then consent, then install - never install anything the captain has not approved in this session - and no work is dispatched until the tools it needs are present and GitHub auth is good.
 When any diagnostic needs captain attention, report the plain consequence and requested action using `AGENTS.md` section 9's captain-facing translation contract; do not name the diagnostic label unless the captain needs to paste it into a command or issue.
 
 - `MISSING: <tool> (install: <command>)` - list the missing tools to the captain with a one-line purpose each plus the printed install commands, wait for consent (one approval may cover the list), then run `bin/fm-bootstrap.sh install <approved tools...>`.
@@ -25,6 +25,10 @@ When any diagnostic needs captain attention, report the plain consequence and re
 - `PRESENTATION_UNAVAILABLE: lavish-axi ...` - explain that visual presentation is unavailable and continue nonvisual work with plain-text decisions and reports; do not hold unrelated dispatch for installation consent.
   Do not use Lavish until it satisfies the floor owned by `bin/fm-bootstrap.sh`; when visual work needs it, request consent for the printed install or upgrade command, then rerun bootstrap to confirm compatibility before using it.
   Scout briefs check the same floor when scaffolded and ask for a text report instead of a Lavish loop, so scaffold a visual scout only after that rerun confirms compatibility.
+- `BROWSER_UNAVAILABLE: chrome-devtools-axi cannot launch a browser (<reason>) ...` - the tool is installed but workers cannot open a page, so browser-based UI verification is unavailable; do not hold unrelated dispatch for it.
+  Check this home's `data/learnings.md` for a recorded working browser setting first; otherwise tell the captain browser verification is unavailable, with the printed reason, and ask before installing a browser or changing shell configuration.
+  Before dispatching work that needs a browser, make a launchable browser reach workers as [`docs/configuration.md`](../../../docs/configuration.md) ("Missing-tool diagnostics") describes, then rerun bootstrap to confirm the line is gone.
+- `BROWSER_PROBE_CLEANUP: chrome-devtools-axi <did not stop within <n>s|stop exited <n>> for probe session <session> ...` - the probe's own cleanup could not confirm the bridge stopped, so a probe browser may still be running under the named per-home session; report this to the captain and run the printed `CHROME_DEVTOOLS_AXI_SESSION=<session> chrome-devtools-axi stop` to confirm cleanup before treating the browser as free.
 - `MISSING_MANUAL: <tool> (instructions: <url>)` - tell the captain why the tool is required and give them the printed instructions URL, but do not pass the tool to `bin/fm-bootstrap.sh install`; wait for the captain to complete the manual installation, then rerun session start to confirm the dependency is present.
 - `BACKEND_INVALID: <name> (known: <names>)` - the resolved runtime backend has no verified dependency or lifecycle contract, so do not dispatch work until the invalid `FM_BACKEND` or `config/backend` value is corrected to one of the listed backends.
 - `NEEDS_GH_AUTH` - ask the captain to run `! gh auth login` (interactive; you cannot run it for them).
@@ -40,6 +44,7 @@ When any diagnostic needs captain attention, report the plain consequence and re
 - `CREW_DISPATCH: invalid config/crew-dispatch.json - <reason>` - the optional dispatch profile file exists but failed low-cost bootstrap validation; stop profile-based dispatch, report the actionable error, and require correction of the malformed schema, unverified harness name, or invalid harness/effort pair rather than falling back around it or selecting a bad profile.
 - `FLEET_SYNC: <repo>: skipped: <reason>` - a benign one-off skip (offline, no origin, local-only); bootstrap continued, investigate only if it blocks work.
   A skip can also report the bounded fleet-refresh timeout (`FM_FLEET_SYNC_BOOTSTRAP_TIMEOUT`, or a fleet-size-aware default with a 20 second floor); a timeout never blocks startup.
+  `skipped: registry entry does not resolve to a delivery posture` is the one skip that is not one-off: the clone is left alone on every bootstrap until `data/projects.md` is corrected, so run the printed `bin/fm-project-mode.sh <repo>` to read the refusal and fix the entry.
 - `FLEET_SYNC: <repo>: recovered: <detail>` - the clone had drifted onto a clean detached HEAD holding no unique commits and the sync self-healed it (re-attached the default branch and fast-forwarded); no action needed, it is reported only so the self-heal is visible.
 - `FLEET_SYNC: <repo>: STUCK: on <state>, N commits behind <base> - needs attention` - the clone is dirty, on a non-default branch, detached with unique commits, or diverged, so the sync left it untouched (never forcing or discarding); it will keep falling behind until you look.
   A loud STUCK, especially a growing N across bootstraps, means that clone needs hands-on attention; dispatch a crewmate or resolve it before it strands work.

@@ -32,7 +32,10 @@
 # where they are instead of being converged.
 #
 # Usage: fm-lock.sh           acquire; exit 1 unless ownership is verified
-#        fm-lock.sh status    print holder and liveness; always exits 0
+#        fm-lock.sh status    print holder and liveness; always exits 0.
+#                             A held lock is not proof the holder is consuming
+#                             wakes. Machine-readable lock fields live on
+#                             fm-inbox.sh ready, from the same inspect helper.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -53,18 +56,22 @@ mkdir -p "$STATE" 2>/dev/null || {
 . "$SCRIPT_DIR/fm-session-lock-lib.sh"
 
 if [ "${1:-}" = "status" ]; then
-  if [ ! -f "$LOCK" ]; then echo "lock: free"; exit 0; fi
-  old=$(cat "$LOCK" 2>/dev/null) || {
-    echo "lock: unreadable"
-    exit 0
-  }
-  if ! fm_harness_pid_alive "$old"; then
-    echo "lock: stale (pid $old dead or not a harness)"
-  elif fm_harness_pid_suspended "$old"; then
-    echo "lock: held by SUSPENDED harness pid $old (reclaimable: a stopped session is not holding this home)"
-  else
-    echo "lock: held by live harness pid $old"
-  fi
+  fm_session_lock_inspect "$STATE"
+  case "$FM_LOCK_INSPECT_STATE" in
+    free) echo "lock: free" ;;
+    unreadable) echo "lock: unreadable" ;;
+    held)
+      # Inspection types a live harness as held, but acquisition below reclaims a
+      # durably suspended holder, so status names that case rather than reporting
+      # a lock this home can already take as simply held.
+      if fm_harness_pid_suspended "$FM_LOCK_INSPECT_PID"; then
+        echo "lock: held by SUSPENDED harness pid $FM_LOCK_INSPECT_PID (reclaimable: a stopped session is not holding this home)"
+      else
+        echo "lock: held by live harness pid $FM_LOCK_INSPECT_PID"
+      fi
+      ;;
+    *) echo "lock: stale (pid $FM_LOCK_INSPECT_PID dead or not a harness)" ;;
+  esac
   exit 0
 fi
 

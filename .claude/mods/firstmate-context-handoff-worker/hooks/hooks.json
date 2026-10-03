@@ -1,0 +1,4 @@
+{
+  "description": "Firstmate context-handoff hooks module, worker part: loaded only by fm-spawn for Claude ship and scout workers; acts only past 250k tokens of context used",
+  "modules": ["./register.ts"]
+}

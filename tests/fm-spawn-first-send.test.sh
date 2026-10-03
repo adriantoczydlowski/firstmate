@@ -349,10 +349,11 @@ test_swallowed_leading_bytes_never_corrupt_the_first_command() {
   pass "a lossy shell init cannot corrupt the first command line"
 }
 
-# The loss window opens only AFTER treehouse get, so the second gate - the one
-# covering the launch environment sent into treehouse's new subshell - is the one
-# that has to absorb it. That send is the path a leading-space mitigation on the
-# treehouse line alone leaves unprotected.
+# The loss window opens only AFTER treehouse get, so the gate covering the first
+# send into treehouse's new subshell - the explicit cd into the recorded
+# worktree - is the one that has to absorb it. That send and the launch
+# environment after it are the path a leading-space mitigation on the treehouse
+# line alone leaves unprotected.
 test_second_gate_protects_the_launch_environment() {
   local rec id out status
   id=first-send-swallow-later-b2
@@ -363,15 +364,19 @@ test_second_gate_protects_the_launch_environment() {
   # corrupts only the post-subshell sends however many probes precede them.
   out=$(FM_FAKE_SWALLOW_AFTER_TREEHOUSE=3 run_spawn "$id" 1 0)
   status=$?
-  expect_code 0 "$status" "spawn should succeed once the second gate absorbs the lossy window"
+  expect_code 0 "$status" "spawn should succeed once the gate after treehouse get absorbs the lossy window"
   assert_contains "$out" "spawned $id" "spawn did not report success"
   assert_delivered_prefix "treehouse get" \
     "the pane never received an intact treehouse get"
+  assert_delivered_prefix "cd -- " \
+    "the pane never received an intact recorded-worktree cd"
+  assert_not_delivered_prefix "d -- " \
+    "the pane received a head-truncated recorded-worktree cd - that send was unguarded"
   assert_delivered_prefix "export GOTMPDIR=" \
     "the pane never received an intact launch environment"
   assert_not_delivered_prefix "xport GOTMPDIR=" \
     "the pane received a head-truncated launch environment - that send was unguarded"
-  pass "the launch-environment send is guarded too, not only treehouse get"
+  pass "the recorded-worktree cd and launch-environment sends are guarded too, not only treehouse get"
 }
 
 # A shell that never accepts a line must stop the spawn loudly. Silently
@@ -427,10 +432,10 @@ test_healthy_shell_pays_one_probe_per_gate() {
   esac
   # The count the case name claims, pinned exactly. The fake shell creates the
   # marker synchronously inside the send, so a healthy gate's very next marker
-  # check succeeds and each of the two gates owes exactly one probe. A regression
+  # check succeeds and each of the three gates owes exactly one probe. A regression
   # that re-probed on the next stride before checking would slide under the 8s
   # bound and leave every other assertion here true.
-  [ "$(delivered_prefix_count 'touch ')" = 2 ] \
+  [ "$(delivered_prefix_count 'touch ')" = 3 ] \
     || fail "a healthy spawn sent $(delivered_prefix_count 'touch ') readiness probes, not one per gate"
   [ "$(delivered_line_count 'key Enter')" = 1 ] \
     || fail "a healthy spawn should send exactly one bare Enter, the launch submit"
