@@ -249,7 +249,66 @@ RUBY
   pass "CI matrices cover every executable serial lane and canonical lint root exactly once"
 }
 
+# Every CI step that installs the Pi package must install one exact version, so
+# a Pi release cannot change required CI on its own. Each such step's script
+# runs against a recording npm stub with the env GitHub would give it, so the
+# assertion is the version the step really asks npm for.
+test_every_pi_install_is_exactly_pinned() {
+  local tmp fakebin steps job script pin latest requested out count=0 warned=0
+  tmp=$(fm_test_tmproot fm-ci-pi-pin) || fail "could not create a temp root"
+  fakebin=$(fm_fakebin "$tmp")
+  cat > "$fakebin/npm" <<'SH'
+#!/usr/bin/env bash
+case "$1" in
+  install) shift; printf '%s\n' "$@" >> "$NPM_STUB_LOG" ;;
+  view) printf '%s\n' "$NPM_STUB_LATEST" ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/npm"
+  steps=$(ruby -ryaml - "$CI_WORKFLOW" "$tmp" <<'RUBY'
+doc = YAML.load_file(ARGV[0])
+base = doc.fetch("env", {})
+doc.fetch("jobs").each do |job, spec|
+  spec.fetch("steps", []).each_with_index do |step, i|
+    run = step["run"].to_s
+    next unless run.match?(/npm\s+install\b[^\n]*@earendil-works\/pi-coding-agent/)
+    pin = base.merge(spec.fetch("env", {})).merge(step.fetch("env", {}))["FM_CI_PI_VERSION"].to_s
+    path = File.join(ARGV[1], "#{job}-#{i}.sh")
+    File.write(path, run)
+    puts [job, path, pin].join("\t")
+  end
+end
+RUBY
+) || fail "could not read the Pi install steps from the CI workflow"
+  while IFS=$'\t' read -r job script pin; do
+    [ -n "$job" ] || continue
+    count=$((count + 1))
+    printf '%s\n' "$pin" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' \
+      || fail "$job installs Pi without an exact FM_CI_PI_VERSION (got '$pin')"
+    for latest in "$pin" 999.0.0; do
+      : > "$tmp/npm.log"
+      out=$(cd "$tmp" && PATH="$fakebin:$PATH" NPM_STUB_LOG="$tmp/npm.log" NPM_STUB_LATEST="$latest" \
+        FM_CI_PI_VERSION="$pin" bash -eu "$script" 2>&1) \
+        || fail "$job's Pi install step failed under the npm stub: $out"
+      requested=$(awk '/^@earendil-works\/pi-coding-agent/' "$tmp/npm.log")
+      assert_equals "@earendil-works/pi-coding-agent@$pin" "$requested" \
+        "$job must ask npm for exactly the pinned Pi package"
+      case "$out" in
+        *'::warning'*)
+          [ "$latest" != "$pin" ] || fail "$job warned about a newer Pi while npm latest equals the pin: $out"
+          warned=$((warned + 1))
+          ;;
+      esac
+    done
+  done <<< "$steps"
+  [ "$count" -ge 2 ] || fail "expected the parallel and serial lanes to install Pi, found $count install steps"
+  [ "$warned" -ge 1 ] || fail "no Pi install step warns when npm publishes a Pi newer than the pin"
+  pass "all $count CI Pi installs request one exact pinned version, and a newer npm release is announced"
+}
+
 test_ci_matrices_match_executable_partitions
+test_every_pi_install_is_exactly_pinned
 test_pr_pushes_supersede_within_one_pr
 test_separate_prs_do_not_cancel_each_other
 test_main_pushes_are_never_cancelled
