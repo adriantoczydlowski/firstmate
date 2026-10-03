@@ -9,6 +9,16 @@ on:
 permissions:
   contents: read
 
+# Exact Pi package the Pi extension tests run against. Those tests compare
+# Firstmate's Pi extensions with the installed Pi's own stock rendering, so an
+# unpinned install let each Pi release change required CI with no change here:
+# 0.99 added call arguments to stock tool headers and default-hidden custom
+# rows to HTML exports, and 1.0.0 made the fullscreen TUI the default.
+# Bump it in its own change, after both Pi extension suites pass on the new
+# release; the parallel 1 install step warns while npm has a newer Pi.
+env:
+  FM_CI_PI_VERSION: 1.0.0
+
 # Per-PR supersession: a new push to the same PR replaces that PR's in-flight
 # CI instead of letting superseded heads keep the full hosted-runner fan-out.
 # The group uses the PR number for pull_request events, so every run of one PR
@@ -115,8 +125,12 @@ jobs:
       - name: Install the Pi package for the Pi extension tests
         run: |
           set -eu
-          npm install -g @earendil-works/pi-coding-agent
+          npm install -g "@earendil-works/pi-coding-agent@${FM_CI_PI_VERSION}"
           npm ls -g --depth 0 @earendil-works/pi-coding-agent
+          latest=$(npm view @earendil-works/pi-coding-agent version 2>/dev/null || true)
+          if [ -n "$latest" ] && [ "$latest" != "$FM_CI_PI_VERSION" ]; then
+            echo "::warning title=Pi pin behind npm::CI tests Pi ${FM_CI_PI_VERSION}, npm latest is ${latest}; bump FM_CI_PI_VERSION once both Pi extension suites pass on it"
+          fi
       - name: Run portable parallel shard 1
         run: |
           set -eu
@@ -219,7 +233,7 @@ jobs:
       - name: Install the Pi package for the Pi extension tests
         run: |
           set -eu
-          npm install -g @earendil-works/pi-coding-agent
+          npm install -g "@earendil-works/pi-coding-agent@${FM_CI_PI_VERSION}"
           npm ls -g --depth 0 @earendil-works/pi-coding-agent
       - name: Run portable serial shard ${{ matrix.shard }}
         env:
