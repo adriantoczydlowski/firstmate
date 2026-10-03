@@ -7,7 +7,8 @@
 // <home>/data/<task>/handoff.md (home read from the status path its launch brief names,
 // in a user row or in the operational-inbox record a launch doorbell names)
 // and, once that file exists, appends one line to its own status file, the channel
-// every other worker event already uses. Without FM_TASK_ID, /handoff, or a status path
+// every other worker event already uses, unless that file's last line already reports
+// a state other than working or resolved. Without FM_TASK_ID, /handoff, or a status path
 // in the brief it stays inert.
 //
 // A worker's single turn can run past the threshold for hours, and session.measure
