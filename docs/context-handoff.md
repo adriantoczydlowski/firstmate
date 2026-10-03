@@ -28,7 +28,7 @@ When each part reads the switch:
 
 | Session | Reads the switch | A change takes effect |
 | --- | --- | --- |
-| Main window or secondmate | At its first crossing in a session, never below the threshold | At the next crossing after a `/clear`, a compaction, or a new session |
+| Main window or secondmate | At each crossing, never below the threshold | At the next crossing, once a `/clear`, a compaction, or a new session has brought the window back under 250k |
 | Ship or scout worker | When `fm-spawn` launches or relaunches it | At the next spawn or relaunch; a running worker keeps what it launched with |
 
 ## The two parts
@@ -60,7 +60,7 @@ After a `/clear` or a compaction brings the window back under 250k, each part re
 
 ## How a session's kind is told apart
 
-The parts tell sessions apart only from what `fm-spawn` already sets at launch, read once at the first crossing:
+The parts tell sessions apart only from what `fm-spawn` already sets at launch, read at each crossing:
 
 | Kind | Recognized by | Served by |
 | --- | --- | --- |

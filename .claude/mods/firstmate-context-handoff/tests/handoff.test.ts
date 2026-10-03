@@ -42,7 +42,7 @@ function world(on: On, options: WorldOptions = {}) {
   mock.env(on, { HOME: '/Users/me', FM_CONFIG_OVERRIDE: CONFIG, ...(options.env ?? {}) })
   const clock = mock.clock(on, { now: 1_000_000 })
   const journal: Journal = { commands: [], fills: [], toasts: [], reads: [], usageReads: 0, commandLists: 0, logs: [] }
-  const stored = 'switch' in options ? options.switch : 'on\n'
+  const state = { stored: 'switch' in options ? options.switch : 'on\n' }
   const names = options.commands ?? ['stow', 'clear', 'handoff', 'compact']
   on('command.list', async () => {
     journal.commandLists += 1
@@ -61,7 +61,7 @@ function world(on: On, options: WorldOptions = {}) {
   })
   on('fs.read', async (_$, e) => {
     journal.reads.push(e.path)
-    if (e.path === SWITCH && stored !== undefined) return { value: stored }
+    if (e.path === SWITCH && state.stored !== undefined) return { value: state.stored }
     return { deny: `ENOENT: ${e.path}` }
   })
   on('prompt.fill', async (_$, e) => {
@@ -80,7 +80,7 @@ function world(on: On, options: WorldOptions = {}) {
   on('turn.complete', async (_$, e) => ({ text: e.answer }))
   on('session.measure', async (_$, e) => ({ changed: e.changed }))
   on('ui.render', async () => ({ type: 'Text', props: {}, children: [STOCK] }))
-  return { clock, journal }
+  return { clock, journal, setSwitch: (value: string | undefined) => (state.stored = value) }
 }
 
 function measure($: Engine, tokens: number | undefined) {
@@ -134,6 +134,18 @@ describe('switch', () => {
     await measure($, 400_000)
     expect(isStock(await band($))).toBe(true)
     expect(journal.commands).toHaveLength(0)
+  })
+
+  test('turned on mid-session, it acts at the next crossing after the window drops', async ($, on) => {
+    const { setSwitch } = world(on, { switch: 'off\n' })
+    await measure($, 300_000)
+    expect(isStock(await band($))).toBe(true)
+    setSwitch('on\n')
+    await measure($, 310_000)
+    expect(isStock(await band($))).toBe(true)
+    await measure($, 40_000)
+    await measure($, 255_000)
+    expect(shown(await band($))).toContain('255k tokens of context used')
   })
 
   test('is not read below the threshold', async ($, on) => {

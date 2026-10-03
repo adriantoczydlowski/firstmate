@@ -24,7 +24,7 @@ $ claude plugin validate --strict .claude/mods/firstmate-context-handoff-worker
 ✔ Validation passed
 
 $ claude plugin test .claude/mods/firstmate-context-handoff
- 17 pass
+ 18 pass
  0 fail
 
 $ claude plugin test .claude/mods/firstmate-context-handoff-worker

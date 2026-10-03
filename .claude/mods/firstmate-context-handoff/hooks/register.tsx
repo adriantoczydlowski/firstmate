@@ -14,7 +14,7 @@
 //   separate firstmate-context-handoff-worker mod fm-spawn loads for it, and a session
 //   without /stow is not a Firstmate session.
 //
-// The switch and the kind are read once, at the first crossing, never below it.
+// The switch and the kind are read at each crossing, never below the threshold.
 // It hooks no classic.* event, never answers an event in place of the engine, and
 // wraps its own work in try/catch around `next(e)`, so a failure here leaves the
 // session as it would be without the mod. docs/context-handoff.md owns the contract.
@@ -126,6 +126,7 @@ async function check($: EngineInterface, used: number | undefined): Promise<void
 }
 
 async function rearm($: EngineInterface): Promise<void> {
+  S.kind = undefined // the next crossing reads the switch and the kind again
   S.stowRunning = false
   S.receipt = undefined
   await setPhase($, 'idle')

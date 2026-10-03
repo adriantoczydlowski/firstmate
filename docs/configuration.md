@@ -169,7 +169,7 @@ It follows the Calm preference's shape: the main-window part resolves the file e
 | `on`, after trimming surrounding whitespace | On: the main window and secondmates act at the threshold, and `fm-spawn` loads the worker part into every Claude ship and scout. |
 | Absent, `off`, unreadable, or anything else | Off, the default: nothing acts and every launch is unchanged. |
 
-The main-window part reads the file at its first crossing in a session; `fm-spawn` reads it on every spawn and relaunch, so a running worker keeps what it launched with.
+The main-window part reads the file at each crossing, never below the threshold; `fm-spawn` reads it on every spawn and relaunch, so a running worker keeps what it launched with.
 There is no command that writes it.
 The primary's file is inherited into each secondmate home under the [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md) inherited-local-material contract, so one choice covers a secondmate and its own workers too.
 
