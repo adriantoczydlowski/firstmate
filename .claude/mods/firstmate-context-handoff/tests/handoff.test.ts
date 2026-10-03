@@ -8,7 +8,7 @@
 import type { On } from 'claude-code'
 import { describe, expect, mock, test, type Engine } from 'claude-code/testing'
 
-import { carryText, parseSwitch, switchPath } from '../hooks/register'
+import { carryText, parseSwitch, switchPath } from '../lib/fm-context-handoff'
 
 const PLUGIN = 'firstmate-context-handoff'
 const CONFIG = '/fm/home/config'
