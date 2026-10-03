@@ -8,7 +8,7 @@ This page is for operators who turn Calm on and need to know what it hides and k
 | Harness | Support |
 | --- | --- |
 | Pi | Fully supported. |
-| Claude Code | Available behind that harness's default-off early-access function-hooks flag, as the [Claude Code](#claude-code) section below describes. |
+| Claude Code | Supported through the `firstmate-calm` mod, which Claude Code 2.1.286 and later load by default, as the [Claude Code](#claude-code) section below describes. |
 
 Calm is off by default.
 The last `/calm` choice persists for the effective Firstmate home across session starts and resumes on either harness.
@@ -179,24 +179,25 @@ Calm on Claude Code is the `firstmate-calm` mod under `.claude/mods/firstmate-ca
 The mod is a Claude Code plugin whose whole behavior lives in one function-hooks module.
 The trusted project auto-loads the mod through the `.claude/skills/firstmate-calm` entry (a symlink into `.claude/mods`), so no `--plugin-dir` or marketplace install is needed.
 
-### Enabling function hooks
+### Loading and the Calm switch
 
-Claude Code's early-access function-hooks surface is off by default.
-Claude Code can load modules through its rollout flag, or per session with `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`.
-The mod independently requires that environment variable to equal `1` before doing anything.
-Firstmate never sets that flag in any project or user settings.
-Enabling it is each captain's own explicit opt-in.
+Claude Code 2.1.286 turned its function-hooks surface on by default, and 2.1.287 released it publicly as Claude Mods.
+From 2.1.286, Claude Code loads the mod in every session of a project the person trusts and ignores `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS`.
+Earlier builds load hooks modules only behind Claude Code's own rollout flag or `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`, which is Claude Code's load gate, not Calm's.
+The mod never reads that variable.
+Calm's only switch is the per-home preference that `/calm` toggles, which is off until a captain turns it on, and Firstmate never turns it on for anyone.
 
-Without that exact value, the mod is a complete no-op, even if Claude Code's rollout flag loads the module:
+While the preference is off or absent, the loaded mod changes nothing the captain sees:
 
-- There is no `/calm` command.
-- The mod reads neither the preference nor the transcript.
+- `/calm` is registered, so Calm can be turned on.
+- The mod reads the preference file, but neither the transcript nor the theme setting.
 - The mod runs no timer.
-- Every drawing stays exactly as Claude Code draws it, whatever `config/calm` says.
+- Every drawing stays exactly as Claude Code draws it.
+- The mod keeps an in-memory note of mid-turn working notes as they stream, so turning Calm on later hides them retroactively.
 
 ### Toggling Calm on Claude Code
 
-With the flag on, the mod registers `/calm`.
+The mod registers `/calm` in every session it loads in.
 It toggles the same per-home preference Pi's `/calm` uses, so one choice applies on both harnesses.
 The toggle answers with a transient "Calm on" or "Calm off" notice under the prompt rather than a transcript row.
 A preference that cannot be written leaves the current choice unchanged, and the notice says so.
@@ -256,10 +257,10 @@ The mod never touches tool execution, prompts, or the stored transcript.
 
 The bounds of the Claude Code support below are recorded with evidence in [`calm-mode-feasibility.md`](calm-mode-feasibility.md#2026-09-15-claude-code-21272-mods-feasibility-and-the-shipped-mod).
 Evidence for 2.1.280 and the record-backed doorbell is also in its [2026-09-25 record](calm-mode-feasibility.md#2026-09-25-claude-code-21280-verification-and-the-record-backed-operational-doorbell) and [2.1.282 reproduction](calm-mode-feasibility.md#2026-09-25-claude-code-21282-reproduction-on-the-installed-build).
+The default-on load and the preference-only switch are recorded in the [2026-10-03 record](calm-mode-feasibility.md#2026-10-03-claude-code-21288-default-on-mods-and-the-preference-only-switch).
 
-- The function-hooks surface is early access and default-off.
-  Claude Code states that its API may change between releases without notice.
-  The mod is verified on Claude Code 2.1.272, 2.1.280, and 2.1.282 and refuses nothing newer.
+- Claude Code loads the mod by default from 2.1.286, but still states that the mods API may change between releases without notice.
+  The mod is verified in a real terminal on Claude Code 2.1.272, 2.1.280, and 2.1.282, passes its engine checks and a headless load on 2.1.288, and refuses nothing newer.
 - Firstmate's typed producers bound for a Claude Code pane ride the record-backed doorbell, so they hide like any operational row.
   Those producers are the away-mode daemon's escalations and a worker's launch brief.
   Only an envelope that reaches Claude Code some other way, as bare typed or launch-prompt text, arrives without its U+2063 and stays visible.

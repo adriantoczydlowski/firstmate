@@ -312,7 +312,7 @@ Queued-row coverage drives Pi's real listing and restore methods over a stand-in
 `tests/fm-pi-primary-types.test.sh` performs strict no-emit TypeScript checking against whichever Pi declarations are installed, without pinning a version of its own.
 `tests/fm-calm-claude-mod.test.sh` needs no Claude Code binary: it proves the mod is one hooks module with no command, skill, agent, or classic hook path around its opt-in, that Pi's working ship renders byte-for-byte the shared sprite core painted in ANSI at every width and step, that the Raster packing lays that frame out exactly, that the mod resolves its home like Pi, that its live and restored working-note classifiers enforce the visibility boundaries [`calm.md`](calm.md#claude-code) owns, and that its operational-input classifier agrees with `bin/fm-operational-input.sh` on a corpus the shell owner itself encodes plus legacy shapes and near misses.
 `tests/fm-calm-claude-mod-plugin.test.sh` runs wherever `claude` is installed without spending a model turn: strict `claude plugin validate` on the folder and on the `.claude/skills` auto-load path, then the mod's own `claude plugin test` suites, which drive the hooks module in the engine's host against a mocked clock, environment, file system, and drawing surface.
-`tests/fm-calm-claude-mod-live-e2e.test.sh` is the opt-in credentialed guard in a real Claude Code TUI under tmux: flag off is a complete no-op with the preference already on, flag on shows the moving boat, hides tool and operational rows, toggles and persists through `/calm`, and `claude --continue` restores the hidden rows.
+`tests/fm-calm-claude-mod-live-e2e.test.sh` is the opt-in credentialed guard in a real Claude Code TUI under tmux: with no preference stored the module may load but Calm draws nothing and writes nothing, with the preference on and `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` unset it shows the moving boat, hides tool and operational rows, toggles and persists through `/calm`, and `claude --continue` restores the hidden rows.
 
 The relevant commands are:
 
@@ -841,3 +841,61 @@ ok - Claude Code 2.1.282 (Claude Code) with the flag unset: no hooks module, no 
 ok - Claude Code 2.1.282 (Claude Code) with the flag on: the mod auto-loads from .claude/skills, /calm exists, the sailboat replaces and moves in the working row, tool rows and the record-backed operational doorbell draw at zero height, /calm restores and re-hides them while persisting the shared preference
 ok - Claude Code 2.1.282 (Claude Code) resumes the transcript with Calm's hidden rows still hidden and the preference intact
 ```
+
+## 2026-10-03 Claude Code 2.1.288 default-on mods and the preference-only switch
+
+Claude Code 2.1.286 turned the function-hooks surface on by default, 2.1.287 released it publicly as Claude Mods, and from 2.1.286 the engine no longer consults `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS`.
+Anthropic's mods overview now says: "If you set `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS` during early access, remove it. Claude Code v2.1.287 and later ignores it, so setting it to `0` doesn't keep mods off."
+The gate around the `tengu_plugin_hooks_modules` rollout flag, read out of each installed binary by the scout `claude-mods-preview-recon`, whose private report holds the raw captures:
+
+| Version | Gate | Meaning |
+| --- | --- | --- |
+| 2.1.283, 2.1.285 | `CLAUDE_CODE_ENABLE_FUNCTION_HOOKS ?? <rollout flag, default false>` | The variable wins when set; otherwise default off. |
+| 2.1.286, 2.1.287 | rollout flag default `true` | Default on; the variable is not in the gate. |
+| 2.1.288 | rollout flag default `true`, excluding only the multi-tenant `claude-code-server` | Default on; the variable survives only in environment allow-lists. |
+
+The 2026-09-15 load gate therefore no longer holds: the module loads in every session of a trusted project, and the mod's own requirement that the variable equal `1` had become a Firstmate-only switch under a name Claude Code tells people to remove.
+The mod no longer reads that variable.
+Its only switch is the per-home `config/calm` preference `/calm` toggles, with the off default [`configuration.md`](configuration.md#calm-preference-configcalm) owns.
+While that preference is off or absent, the module registers `/calm`, reads the preference file, and nothing else: no transcript read, no theme read, no timer, no redraw, and every drawing passes to the engine.
+The theme, the restored transcript's working notes, and the ship's timer are prepared the first time Calm is on in a session, and [`calm.md`](calm.md#loading-and-the-calm-switch) owns the resulting contract.
+
+Loading a mod from a folder the person owns (`--plugin-dir`) makes 2.1.288 write `.claude-plugin/types/`, holding its own `*` ignore file, and a `tsconfig.json` beside `.claude-plugin/` that extends those types.
+The repository ignores both paths under `.claude/mods/*/`, so a local run leaves no untracked file in tracked material.
+The project's `.claude/skills` auto-load path writes neither.
+
+```text
+$ claude --version
+2.1.288 (Claude Code)
+
+$ env -u CLAUDE_CODE_ENABLE_FUNCTION_HOOKS claude plugin validate --strict .claude/mods/firstmate-calm
+  ❯ ./register.ts hooks: session.start, command.run{command=calm}, config.set{key=theme}, turn.step, ui.render{component=Spinner}, ui.render{component=ToolUse}, ui.render{component=ToolResult}, ui.render{component=ToolGroup}, ui.render{component=UserMessage}, ui.render{component=AssistantMessage}
+  ❯ ./register.ts calls: $.clock.every (via present), $.command.register, $.config.list (via readTheme), $.env.get (via load), $.fs.read (via readText), $.fs.write, $.session.messages (via present), $.ui.blit (via repaintShip), $.ui.invalidate (via invalidateDrawings), $.ui.resolve, $.ui.toast
+  ❯ ./register.ts env writes: nothing
+  ❯ ./register.ts env reads: FM_CONFIG_OVERRIDE, FM_HOME, FM_ROOT_OVERRIDE
+✔ Validation passed
+
+$ CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=0 claude plugin test .claude/mods/firstmate-calm
+ 47 pass
+ 0 fail
+Ran 47 tests across 2 files.
+
+$ bash tests/fm-calm-claude-mod-plugin.test.sh
+ok - Claude Code 2.1.288 (Claude Code) validates the Calm mod strictly at its folder and its auto-load path, hooking exactly the working row, tool, user, and assistant drawings and /calm
+ok - Claude Code 2.1.288 (Claude Code) runs the Calm mod's plugin test suites clean: persisted toggle, hidden rows, working notes, and the clock-driven working ship
+```
+
+`claude plugin test` refuses to run while the rollout switch is off, so the second command passing with the variable set to `0` also shows the engine ignores it.
+
+A headless session in a scratch project, with every `CLAUDE_CODE_*` variable unset, an isolated `FM_HOME` holding no `config/calm`, and the mod passed by `--plugin-dir`, loaded the module, found no preference, registered `/calm`, and logged no other Calm call:
+
+```text
+$ claude -p "Reply with exactly OK" --model haiku --no-session-persistence --setting-sources project,local --max-budget-usd 0.05 --plugin-dir .claude/mods/firstmate-calm --debug-file <lab>/debug.log
+OK
+[DEBUG] hooks module firstmate-calm@inline loaded (worker, environment 2, tier user); events: session.start,command.run,config.set,turn.step,ui.render
+[DEBUG] plugin.register: firstmate-calm (user, firstmate-calm@inline), judged by cc-plugin-sec-default: admitted
+[DEBUG] $.fs.read (firstmate-calm): <lab>/fmhome/config/calm failed: ENOENT: no such file or directory
+[DEBUG] $.command.register (firstmate-calm): /calm listed
+```
+
+The live guard was not run on 2.1.288 because the host had no tmux, so the terminal drawing under this build is unverified here; `FM_CLAUDE_CALM_LIVE_E2E=1 tests/fm-calm-claude-mod-live-e2e.test.sh` is the command that refreshes it.
