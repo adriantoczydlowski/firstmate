@@ -69,6 +69,14 @@
       "target": "docs/calm.md"
     },
     {
+      "source": "docs/context-handoff.md",
+      "target": "docs/verification/context-handoff.md"
+    },
+    {
+      "source": "docs/verification/context-handoff.md",
+      "target": "docs/context-handoff.md"
+    },
+    {
       "source": "docs/sessionstart-nudge.md",
       "target": "docs/verification/supervision.md"
     },
@@ -319,6 +327,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/context-handoff.md",
+      "audience": "operator-current"
+    },
+    {
       "path": "docs/cd-guard.md",
       "audience": "maintainer-architecture"
     },
@@ -484,6 +496,10 @@
     },
     {
       "path": "docs/verification/agy.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/verification/context-handoff.md",
       "audience": "maintainer-verification"
     },
     {

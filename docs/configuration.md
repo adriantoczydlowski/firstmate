@@ -11,7 +11,7 @@ Start with the directory layout, then use the setting reference for the behavior
 | Task windows and worker tools | [Runtime backend](#runtime-backend-configbackend--fm_backend) and [harness support](#harness-support) |
 | Worker permissions, accounts, or environment | [Claude permission mode](#claude-permission-mode-configclaude-permission-mode), [worker account pin](#worker-account-pin-configclaude-account-configpi-account), and [worker launch environment](#worker-launch-environment-configlaunch-env-allowlist) |
 | Backlog, preferences, and memory | [Backlog backend](#backlog-backend-taskstoml--configbacklog-backend), [captain preferences](#captain-preferences-datacaptainmd--datacaptain-sharedmd), and [startup memory budget](#startup-memory-budget-configstartup-memory-budget) |
-| Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), and [Calm preference](#calm-preference-configcalm) |
+| Supervision and presentation | [Pi supervision branch](#pi-supervision-branch), [supervision host](#supervision-host-configsupervision-host), [Calm preference](#calm-preference-configcalm), and [context-handoff switch](#context-handoff-switch-configcontext-handoff) |
 | Persistent secondmates | [Secondmate routes](#secondmate-routes-datasecondmatesmd) |
 | Per-run overrides and tuning | [Environment variables](#environment-variables) |
 
@@ -158,6 +158,20 @@ The Pi extension reloads this preference on every Pi `session_start`, including 
 The Claude Code mod reloads it on every `session.start`, including same-process session replacement.
 It also loads the preference lazily before any row that can draw ahead of that event, including during `claude --continue` restoration.
 This preference is local to each Firstmate home and is not part of secondmate inherited configuration.
+
+## Context-handoff switch (config/context-handoff)
+
+The local, gitignored `config/context-handoff` file switches Claude Code's context-handoff mods for the effective Firstmate home; [`context-handoff.md`](context-handoff.md) owns what they do.
+It follows the Calm preference's shape: the main-window part resolves the file exactly as [`config/calm`](#calm-preference-configcalm) is resolved, and `fm-spawn` reads it from the home it launches from.
+
+| Value or file state | Result |
+| --- | --- |
+| `on`, after trimming surrounding whitespace | On: the main window and secondmates act at the threshold, and `fm-spawn` loads the worker part into every Claude ship and scout. |
+| Absent, `off`, unreadable, or anything else | Off, the default: nothing acts and every launch is unchanged. |
+
+The main-window part reads the file at each crossing, never below the threshold; `fm-spawn` reads it on every spawn and relaunch, so a running worker keeps what it launched with.
+There is no command that writes it.
+The primary's file is inherited into each secondmate home under the [`secondmate-provisioning`](../.agents/skills/secondmate-provisioning/SKILL.md) inherited-local-material contract, so one choice covers a secondmate and its own workers too.
 
 ## Pi supervision branch
 
