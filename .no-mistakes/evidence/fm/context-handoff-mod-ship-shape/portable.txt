@@ -1,0 +1,3 @@
+ok - the main-window part is linked into the project's auto-load path and the worker part is linked nowhere
+ok - each context-handoff part is one hooks module with no command, skill, agent, or classic hook, and tracks its tsconfig.json
+ok - the switch resolves like config/calm and reads only on as on; the worker derives its status, handoff path, and working line

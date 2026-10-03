@@ -1,0 +1,46 @@
+
+tests/handoff.test.ts:
+(pass) helpers > resolves the switch like config/calm and reads only on as on [1.10ms]
+(pass) switch > absent: stays inert past 250k and never lists commands [21.30ms]
+(pass) switch > off: stays inert past 250k [21.67ms]
+(pass) switch > turned on mid-session, it acts at the next crossing after the window drops [20.68ms]
+(pass) switch > is not read below the threshold [15.72ms]
+(pass) main window > stays quiet below 250k tokens used and makes no engine call doing so [19.39ms]
+(pass) main window > offers /stow at 250k used, then clear, then carries the receipt into the fresh session [29.68ms]
+(pass) main window > a /clear typed by hand while the clear is offered still carries the receipt [20.54ms]
+(pass) main window > falls back to filling /clear into the prompt when the engine refuses to run it [19.02ms]
+(pass) main window > a refused /stow brings the offer back with a toast [14.65ms]
+(pass) main window > a turn that ends before /stow is dequeued is not taken for the receipt [22.14ms]
+(pass) main window > /stow typed by hand while the offer is up counts as the button [18.16ms]
+(pass) main window > an interrupted /stow goes back to the offer; Not now hides it until the window drops [19.95ms]
+(pass) main window > stays inert where /stow does not exist [15.96ms]
+(pass) other session kinds > a secondmate runs /stow itself once per crossing and draws no button [19.11ms]
+(pass) other session kinds > a secondmate with the switch off does nothing [12.11ms]
+(pass) other session kinds > a ship or scout worker is left to its own mod: no button, no command, no switch read [11.99ms]
+(pass) failure > a failing engine call passes every event through and goes quiet [13.70ms]
+
+ 18 pass
+ 0 fail
+Ran 18 tests across 1 file. [0.45s]
+
+tests/handoff-worker.test.ts:
+(pass) helpers > finds the status path the launch brief names and derives the handoff path [1.15ms]
+(pass) Firstmate worker > below 250k used it only reads usage, once per tool call [15.86ms]
+(pass) Firstmate worker > mid-turn crossing: asks for the handoff as a row and runs no command [10.61ms]
+(pass) Firstmate worker > a subagent's tool call is left alone [14.66ms]
+(pass) Firstmate worker > idle crossing: runs the real /handoff with the durable path, outside the measuring dispatch [18.50ms]
+(pass) Firstmate worker > appends exactly one status line once the requested handoff file exists [18.40ms]
+(pass) Firstmate worker > re-arms once the window drops back under 250k [17.69ms]
+(pass) Firstmate worker > an old handoff file from before the request is not reported [15.59ms]
+(pass) Firstmate worker > stays quiet when the brief names no status file [15.29ms]
+(pass) Firstmate worker > reads the status path from the launch record its doorbell names [17.97ms]
+(pass) Firstmate worker > stays quiet when the launch record cannot be read [14.73ms]
+(pass) Firstmate worker > writes no status line over a last line of done [16.42ms]
+(pass) Firstmate worker > writes no status line over a last line of needs-decision [17.68ms]
+(pass) Firstmate worker > stays quiet without /handoff [9.44ms]
+(pass) Firstmate worker > stays quiet outside a ship or scout worker [6.72ms]
+(pass) failure > a failing engine call passes every event through and goes quiet [20.13ms]
+
+ 16 pass
+ 0 fail
+Ran 16 tests across 1 file. [0.39s]
