@@ -1,0 +1,11 @@
+Pi suites: base 9e91547 vs fix a91fdbf (macOS, tmux 3.7c, Google Chrome)
+
+[Pi 1.0.0] BASE fm-calm-pi-extension (CI serial 2):
+not ok - calm mode was not off by default (missing: 'CALM_E2E_OUTPUT')
+[Pi 1.0.0] BASE fm-pi-branch-extension (CI serial 4):
+not ok - Pi outcomes rendering consumers must preserve stock behavior: file:///private/var/folders/wg/l58p0r3s0f90qy6rt4
+[Pi 1.0.0] FIX fm-calm-pi-extension: 15 ok, 0 not ok, 0 skip
+[Pi 1.0.0] FIX fm-pi-branch-extension: 51 ok, 0 not ok, 0 skip
+[Pi 0.87.1] FIX fm-calm-pi-extension: 15 ok, 0 not ok, 0 skip
+[Pi 0.87.1] FIX fm-pi-branch-extension: 51 ok, 0 not ok, 0 skip
+[stub npm] FIX fm-ci-workflow: ok - all 2 CI Pi installs request one exact pinned version, and a newer npm release is announced
