@@ -9,6 +9,15 @@ on:
 permissions:
   contents: read
 
+# Exact Pi package the Pi extension tests run against. Those tests compare
+# Firstmate's Pi extensions with the installed Pi's own stock rendering, so an
+# unpinned install let each Pi release turn required CI red with no change in
+# this repository: Pi 0.99 and 1.0.0 changed stock tool headers and the TUI.
+# 0.87.1 is the last release both Pi extension suites passed on. Bump it in its
+# own change, once both suites pass on the newer Pi.
+env:
+  FM_CI_PI_VERSION: 0.87.1
+
 # Per-PR supersession: a new push to the same PR replaces that PR's in-flight
 # CI instead of letting superseded heads keep the full hosted-runner fan-out.
 # The group uses the PR number for pull_request events, so every run of one PR
@@ -115,7 +124,7 @@ jobs:
       - name: Install the Pi package for the Pi extension tests
         run: |
           set -eu
-          npm install -g @earendil-works/pi-coding-agent
+          npm install -g "@earendil-works/pi-coding-agent@${FM_CI_PI_VERSION}"
           npm ls -g --depth 0 @earendil-works/pi-coding-agent
       - name: Run portable parallel shard 1
         run: |
@@ -219,7 +228,7 @@ jobs:
       - name: Install the Pi package for the Pi extension tests
         run: |
           set -eu
-          npm install -g @earendil-works/pi-coding-agent
+          npm install -g "@earendil-works/pi-coding-agent@${FM_CI_PI_VERSION}"
           npm ls -g --depth 0 @earendil-works/pi-coding-agent
       - name: Run portable serial shard ${{ matrix.shard }}
         env:
