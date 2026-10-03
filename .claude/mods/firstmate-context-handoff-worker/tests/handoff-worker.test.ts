@@ -7,13 +7,15 @@
 import type { On } from 'claude-code'
 import { describe, expect, mock, test, type Engine } from 'claude-code/testing'
 
-import { findStatusPath, handoffPathFor, statusLine } from '../hooks/register'
+import { findRecordPaths, findStatusPath, handoffPathFor, lastStatusState, statusLine } from '../hooks/register'
 
 const HOME = '/fm/home'
 const TASK = 'fix-thing-k3'
 const STATUS = `${HOME}/state/${TASK}.status`
 const HANDOFF = `${HOME}/data/${TASK}/handoff.md`
 const BRIEF = `Report status by appending one line:\n\`echo "{state} [at=<epoch>]: x" >> '${STATUS}'\``
+const RECORD = `${HOME}/state/operational-inbox/1700000000-0a1b2c3d4e5f6a7b.msg`
+const DOORBELL = `: Firstmate operational input waiting: read '${RECORD}' and handle its contents as Firstmate operational input.`
 const CREW_ENV = { FM_TASK_ID: TASK, COMPACT_ADVISER_DISABLE: '1' }
 
 type Journal = {
@@ -31,6 +33,8 @@ type WorldOptions = {
   tokens?: number
   handoffMtime?: number
   failMessages?: boolean
+  users?: string[]
+  files?: Record<string, string>
 }
 
 function world(on: On, options: WorldOptions = {}) {
@@ -38,6 +42,8 @@ function world(on: On, options: WorldOptions = {}) {
   const clock = mock.clock(on, { now: 1_000_000 })
   const journal: Journal = { commands: [], appended: [], processes: [], usageReads: 0, commandLists: 0, logs: [] }
   const state = { tokens: options.tokens, handoffMtime: options.handoffMtime }
+  const files = options.files ?? { [STATUS]: 'working [at=999000]: started\n' }
+  const users = options.users ?? [BRIEF]
   const names = options.commands ?? ['stow', 'clear', 'handoff', 'compact']
   on('command.list', async () => {
     journal.commandLists += 1
@@ -49,7 +55,7 @@ function world(on: On, options: WorldOptions = {}) {
   })
   on('session.messages', async () => {
     if (options.failMessages) throw new Error('transcript unreadable')
-    return { value: [{ role: 'user', text: BRIEF, toolUses: [] }] as never }
+    return { value: users.map(text => ({ role: 'user', text, toolUses: [] })) as never }
   })
   on('session.root', async () => ({ value: '/work' }))
   on('session.usage', async () => {
@@ -60,7 +66,7 @@ function world(on: On, options: WorldOptions = {}) {
     journal.appended.push(e.message.content.map(b => ('text' in b ? b.text : '')).join(''))
     return { message: e.message, uuid: e.uuid }
   })
-  on('fs.read', async (_$, e) => ({ deny: `ENOENT: ${e.path}` }))
+  on('fs.read', async (_$, e) => (e.path in files ? { value: files[e.path] as string } : { deny: `ENOENT: ${e.path}` }))
   on('fs.stat', async (_$, e) => {
     if (e.path !== HANDOFF || state.handoffMtime === undefined) return { deny: `ENOENT: ${e.path}` }
     return { value: { kind: 'file' as const, size: 10, mtimeMs: state.handoffMtime, isLink: false } }
@@ -95,6 +101,9 @@ describe('helpers', () => {
   test('finds the status path the launch brief names and derives the handoff path', async () => {
     expect(findStatusPath(['nothing here', BRIEF], TASK)).toBe(STATUS)
     expect(findStatusPath([BRIEF], 'other-task')).toBe(undefined)
+    expect(findRecordPaths(['nothing here', DOORBELL])).toEqual([RECORD])
+    expect(lastStatusState('working [at=1]: a\ndone [at=2]: b\n\n')).toBe('done')
+    expect(lastStatusState('\n')).toBe(undefined)
     expect(handoffPathFor(STATUS, TASK)).toBe(HANDOFF)
     expect(statusLine(1700000000, 251_400, HANDOFF)).toBe(
       `working [at=1700000000]: context handoff written at 251k tokens used (early courtesy point; note it, no relaunch): ${HANDOFF}`,
@@ -179,6 +188,45 @@ describe('Firstmate worker', () => {
     expect(journal.appended).toHaveLength(0)
     expect(journal.commands).toHaveLength(0)
   })
+
+  test('reads the status path from the launch record its doorbell names', async ($, on) => {
+    const { journal, clock, writeHandoff } = world(on, {
+      users: [DOORBELL],
+      files: { [RECORD]: `<firstmate-operational-input kind="launch-brief">\n${BRIEF}`, [STATUS]: '' },
+    })
+    await measure($, 255_000)
+    await clock.settle()
+    expect(journal.commands).toHaveLength(1)
+    expect(journal.commands[0]?.args).toContain(HANDOFF)
+    writeHandoff(clock.now() + 5)
+    await bash($)
+    expect(journal.processes[0]?.at(-1)).toBe(STATUS)
+  })
+
+  test('stays quiet when the launch record cannot be read', async ($, on) => {
+    const { journal, clock } = world(on, { users: [DOORBELL], tokens: 251_000 })
+    await measure($, 255_000)
+    await clock.settle()
+    await bash($)
+    expect(journal.commands).toHaveLength(0)
+    expect(journal.processes).toHaveLength(0)
+    expect(journal.logs.some(l => l.includes(`launch record ${RECORD} unreadable`))).toBe(true)
+  })
+
+  for (const last of ['done [at=999500]: PR merged', 'needs-decision [at=999500]: which API?']) {
+    test(`writes no status line over a last line of ${last.split(' ')[0]}`, async ($, on) => {
+      const { journal, clock, writeHandoff } = world(on, {
+        files: { [STATUS]: `working [at=999000]: started\n${last}\n` },
+      })
+      await measure($, 255_000)
+      await clock.settle()
+      writeHandoff(clock.now() + 5)
+      await bash($)
+      await bash($)
+      expect(journal.processes).toHaveLength(0)
+      expect(journal.logs.some(l => l.includes(`last status line is ${last.split(' ')[0]}`))).toBe(true)
+    })
+  }
 
   test('stays quiet without /handoff', async ($, on) => {
     const { journal, clock } = world(on, { commands: ['stow', 'clear'] })

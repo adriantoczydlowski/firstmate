@@ -54,8 +54,8 @@ It fires when `context.tokens >= 250000`, whatever the window size.
 | Smaller than 250k (Haiku 4.5's 200k) | More than the whole window | **Never fires.** Claude Code's own compaction acts first. |
 
 The measurement arrives after each main-thread turn.
-Below the threshold the check makes no engine call, reads no file, and reads no environment.
-A worker also checks after each of its own tool calls, because a worker's single turn can run past the threshold for hours.
+Below the threshold the per-turn check makes no engine call, reads no file, and reads no environment.
+A worker also checks after each of its own tool calls, because a worker's single turn can run past the threshold for hours; that check reads the session's usage once per tool call, below the threshold too, and does nothing else there.
 After a `/clear` or a compaction brings the window back under 250k, each part re-arms for the next crossing.
 
 ## How a session's kind is told apart
@@ -99,6 +99,7 @@ It does not clear its session: the stow files its durable memory, and the second
 
 Nobody watches a worker's pane either, so a ship or scout worker gets no band.
 At the crossing it writes its own handoff to **`<home>/data/<task-id>/handoff.md`**, where `<home>` is the Firstmate home whose status file the worker's launch brief names.
+The worker part looks for that quoted status path in the worker's own prompt text first; a Claude worker's prompt is the launch doorbell from `bin/fm-operational-input.sh`, so it then reads the operational-inbox record each doorbell names and looks there.
 That path survives teardown, and it is the durable handoff location for every Firstmate worker.
 
 | Worker state at the crossing | What happens |
@@ -113,6 +114,7 @@ working [at=<epoch>]: context handoff written at 252k tokens used (early courtes
 ```
 
 A handoff file left from before the request is never reported, and only one line is written per crossing.
+The line is written only while the status file is empty or its last line is still a `working` or `resolved` state; when the worker has already reported `done`, `needs-decision`, or any other state, the handoff is still written but no line goes over that state, so firstmate keeps reading what the worker last said.
 
 ### What firstmate does with the line
 
@@ -127,14 +129,15 @@ The handoff stays on disk for the moment a relaunch is actually needed, such as 
 | --- | --- |
 | The switch is off or absent | A plain session: no band, no self-run command, no status line; `/stow`, `/handoff`, and `/clear` behave as always. |
 | A part is not loaded (not Claude Code, mods turned off, `--safe-mode`, or the worker launched before the switch was on) | The same plain session. |
-| Below the threshold | Nothing; the check makes no engine call. |
+| Below the threshold | Nothing; the per-turn check makes no engine call, and a worker's per-tool-call check only reads the session's usage. |
 | A hook throws or times out | The hook is skipped and the event proceeds untouched; one dim line in the session names the skipped hook, because Claude Code watches both parts' folders. |
 | A part does not load | One dim line at start names the module that did not load; the session is otherwise normal. |
 | A call fails at the crossing (transcript unreadable, command list unavailable) | That part goes quiet for the rest of the window; every event still passes through. |
 | `/stow` refused | The offer comes back with the notice `The handoff could not start; type /stow yourself.` |
 | `/clear` refused | `/clear` is filled into the prompt with the notice `Press Enter to clear; the handoff follows into the new session.`; Enter clears and the receipt follows. |
 | The carry fails after the clear | A plain `/clear`: a fresh session without the receipt, while the stowed memory stays on disk. |
-| The worker's brief names no status file, or the worker has no `/handoff` | No row, no command, no status line. |
+| The worker's brief names no status file, its launch record cannot be read, or the worker has no `/handoff` | No row, no command, no status line. |
+| The worker's status file cannot be read, or its last line is a state other than `working` or `resolved` | The handoff is written; no status line. |
 | The worker part's folder is missing when a worker launches | `fm-spawn` warns and launches the worker without it. |
 
 ## Support bounds

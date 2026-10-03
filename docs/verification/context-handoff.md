@@ -28,7 +28,7 @@ $ claude plugin test .claude/mods/firstmate-context-handoff
  0 fail
 
 $ claude plugin test .claude/mods/firstmate-context-handoff-worker
- 12 pass
+ 16 pass
  0 fail
 ```
 
@@ -54,6 +54,7 @@ done [at=1791021842]: x
 ```
 
 The worker then finished its remaining reads and appended its own `done` line, so the request did not derail the task.
+This run named the status path in the prompt itself; a real Claude worker's prompt is the launch doorbell naming an operational-inbox record, and the worker plugin suite covers that shape (the path read from the record, and quiet when the record cannot be read) along with the guard that writes no line over a last `done` or `needs-decision` line.
 
 ### Main-window part, prototype lab
 

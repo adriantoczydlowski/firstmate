@@ -4,7 +4,8 @@
 // project, only while the launching home's `config/context-handoff` switch is on. Nobody
 // watches a worker's pane, so there is no button: when the session has used THRESHOLD
 // tokens of context (consumption, not remaining) the worker writes its own handoff to
-// <home>/data/<task>/handoff.md (home read from the status path its launch brief names)
+// <home>/data/<task>/handoff.md (home read from the status path its launch brief names,
+// in a user row or in the operational-inbox record a launch doorbell names)
 // and, once that file exists, appends one line to its own status file, the channel
 // every other worker event already uses. Without FM_TASK_ID, /handoff, or a status path
 // in the brief it stays inert.
@@ -52,6 +53,19 @@ export function findStatusPath(texts: readonly string[], taskId: string): string
     if (match) return match[1]
   }
   return undefined
+}
+
+/** The record paths launch doorbells name: `'<home>/state/operational-inbox/<name>.msg'`. */
+export function findRecordPaths(texts: readonly string[]): string[] {
+  const pattern = /'(\/[^'\n]*\/operational-inbox\/[0-9a-z-]+\.msg)'/g
+  return texts.flatMap(text => [...text.matchAll(pattern)].map(match => match[1] as string))
+}
+
+/** The state word of a status file's last non-blank line, or undefined when it has none. */
+export function lastStatusState(content: string): string | undefined {
+  const last = content.split('\n').map(line => line.trim()).filter(line => line !== '').at(-1)
+  if (last === undefined) return undefined
+  return /^[A-Za-z-]+/.exec(last)?.[0] ?? ''
 }
 
 /** `<home>/state/<id>.status` -> `<home>/data/<id>/handoff.md` */
@@ -126,11 +140,26 @@ async function handoffSkillText($: EngineInterface): Promise<string | undefined>
   return undefined
 }
 
+async function statusPathFromRecords($: EngineInterface, users: readonly string[], taskId: string): Promise<string | undefined> {
+  for (const record of findRecordPaths(users)) {
+    let content
+    try {
+      content = await $.fs.read(record)
+    } catch {
+      debug($, `worker ${taskId}: launch record ${record} unreadable`)
+      continue
+    }
+    const found = findStatusPath([content], taskId)
+    if (found !== undefined) return found
+  }
+  return undefined
+}
+
 async function requestHandoff($: EngineInterface, taskId: string, used: number, isTurnRunning: boolean): Promise<void> {
   const users = (await $.session.messages()).filter(m => m.role === 'user').map(m => m.text)
-  const statusPath = findStatusPath(users, taskId)
+  const statusPath = findStatusPath(users, taskId) ?? (await statusPathFromRecords($, users, taskId))
   if (statusPath === undefined) {
-    debug($, `worker ${taskId}: no status path in the transcript; staying quiet`)
+    debug($, `worker ${taskId}: no status path in the transcript or its launch records; staying quiet`)
     S.phase = 'done'
     return
   }
@@ -175,6 +204,18 @@ async function reportHandoff($: EngineInterface): Promise<void> {
   }
   if (stat.kind !== 'file' || stat.mtimeMs < S.requestedAt) return
   S.phase = 'done'
+  let current
+  try {
+    current = await $.fs.read(S.statusPath)
+  } catch {
+    debug($, `worker: status file ${S.statusPath} unreadable; no status line`)
+    return
+  }
+  const state = lastStatusState(current)
+  if (state !== undefined && state !== 'working' && state !== 'resolved') {
+    debug($, `worker: last status line is ${state}; no status line over it`)
+    return
+  }
   const used = (await $.session.usage()).context.tokens ?? 0
   const line = statusLine(Math.floor((await $.clock.now()) / 1000), used, S.handoffPath)
   // O_APPEND through the shell, exactly as the worker's own `echo ... >>` does.
