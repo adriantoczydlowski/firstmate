@@ -26,7 +26,7 @@
 // draws as zero height. Calm off returns every drawing to the
 // engine. A toggle invalidates every hooked drawing, so rows already on screen redraw.
 // The boat is painted in Claude Code's own theme colors: the family is read from the
-// `theme` setting at load and re-read when a `config.set` changes it.
+// `theme` setting the first time Calm is on in a session and re-read when a `config.set` changes it.
 //
 // Loading is lazy and cached within a session: a resumed transcript or a hot reload can
 // draw restored rows before `session.start`, so every hook awaits that session's load of
