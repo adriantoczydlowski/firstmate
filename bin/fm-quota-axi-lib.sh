@@ -147,12 +147,15 @@ fm_quota_single_provider_table() {
 
 fm_quota_single_provider_for_harness() {
   local harness provider
+  # A here-string, not a process substitution: the loop returns at the first
+  # match, and the table writer would then hit EPIPE and print a write error
+  # where SIGPIPE is ignored, as on CI runners
   while read -r harness provider; do
     if [ "$harness" = "$1" ]; then
       printf '%s\n' "$provider"
       return 0
     fi
-  done < <(fm_quota_single_provider_table)
+  done <<<"$(fm_quota_single_provider_table)"
   return 1
 }
 
