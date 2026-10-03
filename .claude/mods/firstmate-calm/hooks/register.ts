@@ -30,8 +30,9 @@
 //
 // Loading is lazy and cached within a session: a resumed transcript or a hot reload can
 // draw restored rows before `session.start`, so every hook awaits that session's load of
-// the per-home preference rather than trusting a stale "off". The theme, the restored
-// working notes, and the ship's timer are prepared only once Calm is on in that session.
+// the per-home preference rather than trusting a stale "off". The theme and the restored
+// working notes are prepared only once Calm is on in that session; the ship's timer runs
+// only while Calm is on, stopping whenever it turns off and starting again when it turns on.
 // Each `session.start` clears presentation classifications and reloads the new session.
 import type { EngineInterface, Register, RenderElement, RenderInput } from "claude-code";
 import {
@@ -108,6 +109,7 @@ async function load($: EngineInterface): Promise<void> {
   if (parseCalmPreference(await readText($, preferencePath))) {
     await ensurePresenting($);
     calm = true;
+    startTicker($);
     invalidateDrawings($);
   }
 }
@@ -117,7 +119,7 @@ function ensureLoaded($: EngineInterface): Promise<void> {
   return loading;
 }
 
-/** Everything only an active Calm draws from: the theme, restored notes, and the ship's timer. */
+/** What an active Calm draws from, once per session: the theme and restored notes. */
 async function present($: EngineInterface): Promise<void> {
   palette = CALM_SHIP_RASTER_PALETTES[calmShipPaletteFamily(await readTheme($))];
   try {
@@ -127,16 +129,26 @@ async function present($: EngineInterface): Promise<void> {
   } catch {
     // A transcript that cannot be read leaves restored narration visible; nothing else changes.
   }
-  if (ticker === undefined) {
-    ticker = $.clock.every(CALM_WORKING_SHIP_TICK_MS, () => {
-      void repaintShip($);
-    });
-  }
 }
 
 function ensurePresenting($: EngineInterface): Promise<void> {
   if (presenting === undefined) presenting = present($);
   return presenting;
+}
+
+/** Start the ship's timer while Calm is on; a running timer is left as it is. */
+function startTicker($: EngineInterface): void {
+  if (ticker !== undefined) return;
+  ticker = $.clock.every(CALM_WORKING_SHIP_TICK_MS, () => {
+    void repaintShip($);
+  });
+}
+
+/** Stop the ship's timer and forget every site it repainted. */
+function stopTicker(): void {
+  ticker?.cancel();
+  ticker = undefined;
+  sites.clear();
 }
 
 async function resetSession($: EngineInterface): Promise<void> {
@@ -146,10 +158,10 @@ async function resetSession($: EngineInterface): Promise<void> {
   preferencePath = undefined;
   loading = undefined;
   presenting = undefined;
+  stopTicker();
   workingNotes.clear();
   finalReplies.clear();
   doorbellVerdicts.clear();
-  sites.clear();
   sprite.reset();
   palette = CALM_SHIP_RASTER_PALETTES.light;
   await ensureLoaded($);
@@ -224,7 +236,8 @@ export const register: Register = (on) => {
     }
     if (active) await ensurePresenting($);
     calm = active;
-    if (!calm) sites.clear();
+    if (calm) startTicker($);
+    else stopTicker();
     invalidateDrawings($);
     $.ui.toast(active ? "Calm on" : "Calm off");
     // No `text`: the toggle leaves no output row in the transcript, as on Pi.
