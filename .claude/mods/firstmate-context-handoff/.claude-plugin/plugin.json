@@ -1,0 +1,10 @@
+{
+  "name": "firstmate-context-handoff",
+  "version": "0.1.0",
+  "description": "Prototype: at 250k context tokens used, offers /stow then a clear that carries the receipt into the fresh session (main window), or runs the handoff itself and reports on its status file (Firstmate worker).",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "Firstmate",
+    "url": "https://github.com/kunchenguid/firstmate"
+  }
+}
