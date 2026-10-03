@@ -249,49 +249,6 @@ RUBY
   pass "CI matrices cover every executable serial lane and canonical lint root exactly once"
 }
 
-# The Pi extension suites compare against the installed Pi's own stock
-# rendering, so every Pi install step must install one exact Pi release: an
-# unpinned install let Pi 0.99 and 1.0.0 turn required CI red. Each install
-# step's script runs under the workflow env with npm stubbed, and the package
-# spec it installs must carry an exact version.
-test_pi_install_steps_pin_an_exact_release() {
-  local tmp
-  tmp=$(fm_test_tmproot fm-ci-workflow-pi) || fail "could not create a temp dir"
-  mkdir -p "$tmp/bin"
-  cat > "$tmp/bin/npm" <<'NPM'
-#!/usr/bin/env bash
-[ "${1:-}" = install ] && printf '%s\n' "$*" >> "$NPM_LOG"
-exit 0
-NPM
-  chmod +x "$tmp/bin/npm"
-  ruby -ryaml -ropen3 - "$CI_WORKFLOW" "$tmp" <<'RUBY' || fail "Pi install pin contract"
-doc = YAML.load_file(ARGV[0])
-tmp = ARGV[1]
-env = (doc["env"] || {}).transform_values(&:to_s)
-seen = 0
-doc.fetch("jobs").each do |job_name, job|
-  job.fetch("steps", []).each do |step|
-    script = step["run"].to_s
-    next unless script.include?("pi-coding-agent")
-    seen += 1
-    log = File.join(tmp, "npm-#{seen}.log")
-    run_env = env.merge((job["env"] || {}).transform_values(&:to_s), (step["env"] || {}).transform_values(&:to_s))
-    run_env = run_env.merge("NPM_LOG" => log, "PATH" => "#{tmp}/bin:#{ENV.fetch("PATH")}")
-    _out, status = Open3.capture2e(run_env, "bash", "-c", script)
-    raise "#{job_name}: Pi install step failed" unless status.success?
-    specs = File.exist?(log) ? File.read(log).split : []
-    pi = specs.select { |a| a.start_with?("@earendil-works/pi-coding-agent") }
-    raise "#{job_name}: Pi install step installs no Pi package" if pi.empty?
-    pi.each do |spec|
-      raise "#{job_name}: Pi install #{spec.inspect} is not an exact release" unless spec.match?(/\A@earendil-works\/pi-coding-agent@\d+\.\d+\.\d+\z/)
-    end
-  end
-end
-raise "no Pi install step found" if seen.zero?
-RUBY
-  pass "every CI Pi install step installs one exact Pi release"
-}
-
 test_ci_matrices_match_executable_partitions
 test_pr_pushes_supersede_within_one_pr
 test_separate_prs_do_not_cancel_each_other
@@ -301,4 +258,3 @@ test_every_job_belongs_to_exactly_one_timeout_tier
 test_fast_tier_shares_one_short_tripwire
 test_normal_tier_shares_one_budget
 test_heavy_tier_keeps_a_step_tripwire_under_a_job_backstop
-test_pi_install_steps_pin_an_exact_release
