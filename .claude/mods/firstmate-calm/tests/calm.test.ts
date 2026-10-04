@@ -42,7 +42,8 @@ describe("activation", () => {
     expect(journal.blits).toHaveLength(0);
     expect(journal.invalidations).toHaveLength(0);
     expect(journal.toasts).toHaveLength(0);
-    expect(journal.fsReads).toEqual([PREFERENCE]);
+    // A missing preference is found absent before any read, so only a stored one is read.
+    expect(journal.fsReads).toEqual(options.preference === undefined ? [] : [PREFERENCE]);
     expect(journal.logs).toHaveLength(0);
     expect(journal.sessionMessageReads).toBe(0);
     expect(journal.configLists).toBe(0);
