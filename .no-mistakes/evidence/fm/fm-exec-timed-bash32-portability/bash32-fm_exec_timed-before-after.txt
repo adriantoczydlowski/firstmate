@@ -1,0 +1,11 @@
+$ /bin/bash --version | head -1
+GNU bash, version 3.2.57(1)-release (arm64-apple-darwin25)
+
+=== BASE f1d03dc (before fix) ===
+$TMP/base/fm-timeout-lib.sh: line 224: BASHPID: unbound variable
+script exit=1
+
+=== HEAD d74a242 (after fix) ===
+tasks-axi stub ran: mv c2-protraction-split-on-labels --to in-progress (ppid=13990)
+fm_tasks_axi rc=0
+script exit=0
