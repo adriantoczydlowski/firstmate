@@ -142,6 +142,7 @@ The main-window part keeps one exception: a carry already pending for the next s
 | `/clear` refused | `/clear` is filled into the prompt with the notice `Press Enter to clear; the handoff follows into the new session.`; Enter clears and the receipt follows. |
 | The carry fails after the clear | A plain `/clear`: a fresh session without the receipt, while the stowed memory stays on disk. |
 | The worker's brief names no status file, its launch record cannot be read, or the worker has no `/handoff` | No row, no command, no status line. |
+| Idle, the worker's own `/handoff` run is refused (busy, engine error) | No handoff file, no status line; the worker goes quiet on that crossing and waits for the next one. |
 | The worker's status file cannot be read, or its last line is a state other than `working` or `resolved` | The handoff is written; no status line. |
 | The worker part's folder is missing when a worker launches | `fm-spawn` warns and launches the worker without it. |
 

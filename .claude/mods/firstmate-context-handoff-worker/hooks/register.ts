@@ -200,7 +200,10 @@ async function requestHandoff($: EngineInterface, taskId: string, used: number, 
     $.clock.after(0, () => {
       $.command
         .run({ command: 'handoff', args: `Continuation of Firstmate task ${taskId}. ${where}` })
-        .catch((error: unknown) => debug($, `worker ${taskId}: /handoff refused: ${String(error)}`))
+        .catch((error: unknown) => {
+          debug($, `worker ${taskId}: /handoff refused: ${String(error)}`)
+          if (S.phase === 'requested') S.phase = 'done'
+        })
     })
   }
 }

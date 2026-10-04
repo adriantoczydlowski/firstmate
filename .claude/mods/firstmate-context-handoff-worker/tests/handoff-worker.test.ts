@@ -24,6 +24,7 @@ type Journal = {
   processes: string[][]
   usageReads: number
   commandLists: number
+  statReads: number
   logs: string[]
 }
 
@@ -33,6 +34,7 @@ type WorldOptions = {
   tokens?: number
   handoffMtime?: number
   failMessages?: boolean
+  failHandoffCommand?: boolean
   users?: string[]
   files?: Record<string, string>
 }
@@ -40,7 +42,15 @@ type WorldOptions = {
 function world(on: On, options: WorldOptions = {}) {
   mock.env(on, { HOME: '/Users/me', ...(options.env ?? CREW_ENV) })
   const clock = mock.clock(on, { now: 1_000_000 })
-  const journal: Journal = { commands: [], appended: [], processes: [], usageReads: 0, commandLists: 0, logs: [] }
+  const journal: Journal = {
+    commands: [],
+    appended: [],
+    processes: [],
+    usageReads: 0,
+    commandLists: 0,
+    statReads: 0,
+    logs: [],
+  }
   const state = { tokens: options.tokens, handoffMtime: options.handoffMtime }
   const files = options.files ?? { [STATUS]: 'working [at=999000]: started\n' }
   const users = options.users ?? [BRIEF]
@@ -51,6 +61,7 @@ function world(on: On, options: WorldOptions = {}) {
   })
   on('command.run', async (_$, e) => {
     journal.commands.push({ command: e.command, ...(e.args ? { args: e.args } : {}) })
+    if (options.failHandoffCommand && e.command === 'handoff') throw new Error('command busy')
     return {}
   })
   on('session.messages', async () => {
@@ -68,6 +79,7 @@ function world(on: On, options: WorldOptions = {}) {
   })
   on('fs.read', async (_$, e) => (e.path in files ? { value: files[e.path] as string } : { deny: `ENOENT: ${e.path}` }))
   on('fs.stat', async (_$, e) => {
+    journal.statReads += 1
     if (e.path !== HANDOFF || state.handoffMtime === undefined) return { deny: `ENOENT: ${e.path}` }
     return { value: { kind: 'file' as const, size: 10, mtimeMs: state.handoffMtime, isLink: false } }
   })
@@ -145,6 +157,18 @@ describe('Firstmate worker', () => {
     expect(journal.commands).toHaveLength(1)
     expect(journal.commands[0]?.command).toBe('handoff')
     expect(journal.commands[0]?.args).toContain(HANDOFF)
+  })
+
+  test('idle crossing: a refused /handoff command does not leave the request stuck', async ($, on) => {
+    const { journal, clock } = world(on, { failHandoffCommand: true })
+    await measure($, 255_000)
+    expect(journal.statReads).toBe(1) // the one immediate check inside the crossing itself
+    await clock.settle()
+    expect(journal.commands).toHaveLength(1)
+    expect(journal.logs.some(l => l.startsWith(`worker ${TASK}: /handoff refused`))).toBe(true)
+    await bash($)
+    await bash($)
+    expect(journal.statReads).toBe(1) // no further polling once the refusal is reported
   })
 
   test('appends exactly one status line once the requested handoff file exists', async ($, on) => {
