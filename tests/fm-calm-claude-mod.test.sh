@@ -3,7 +3,7 @@
 # no Claude Code binary, so CI enforces them wherever Node runs:
 #   - the plugin's declared shape: one hooks module and nothing else, reached from the
 #     project's .claude/skills auto-load path through the tracked symlink, so nothing
-#     of it can load while CLAUDE_CODE_ENABLE_FUNCTION_HOOKS is off;
+#     of it can act outside the module's own per-home preference gate;
 #   - the harness-neutral sprite core both harnesses share: the Pi widget's rendering
 #     is byte-for-byte the shared frame painted with standard ANSI codes, so extracting
 #     the core changed nothing Pi draws;
@@ -60,12 +60,12 @@ const mod = $(js_string "$MOD");
 const manifest = JSON.parse(readFileSync(\`\${mod}/.claude-plugin/plugin.json\`, "utf8"));
 if (manifest.name !== "fm") throw new Error(\`manifest name \${manifest.name}\`);
 for (const key of ["commands", "agents", "skills", "hooks", "mcpServers", "lspServers", "outputStyles"]) {
-  if (key in manifest) throw new Error(\`manifest declares \${key}, which would load while the flag is off\`);
+  if (key in manifest) throw new Error(\`manifest declares \${key}, which would load outside the module's preference gate\`);
 }
 const hooks = JSON.parse(readFileSync(\`\${mod}/hooks/hooks.json\`, "utf8"));
 const keys = Object.keys(hooks).sort();
 if (JSON.stringify(keys) !== JSON.stringify(["description", "modules"])) {
-  throw new Error(\`hooks.json declares \${keys.join(", ")}: a classic hook would run while the flag is off\`);
+  throw new Error(\`hooks.json declares \${keys.join(", ")}: a classic hook would run outside the module's preference gate\`);
 }
 if (JSON.stringify(hooks.modules) !== JSON.stringify(["./register.ts"])) throw new Error("hooks.json names a different module");
 if (!existsSync(\`\${mod}/hooks/register.ts\`)) throw new Error("the hooks module is missing");
@@ -77,7 +77,7 @@ console.log("shape-ok");
 JS
   out=$(run_node "$TMP_ROOT/shape.mjs" 2>&1) || fail "plugin shape: $out"
   assert_contains "$out" "shape-ok" "plugin shape check did not complete"
-  pass "the Calm mod is one hooks module, linked into the project's auto-load path, with no command, skill, agent, or classic hook path that bypasses its exact opt-in"
+  pass "the Calm mod is one hooks module, linked into the project's auto-load path, with no command, skill, agent, or classic hook path that bypasses its per-home preference"
 }
 
 test_shared_sprite_and_pi_rendering() {

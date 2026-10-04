@@ -4,6 +4,8 @@ data/
 scratchpad*
 .no-mistakes/
 .lavish/
+.claude/mods/*/.claude-plugin/types/
+.claude/mods/*/tsconfig.json
 .fm-secondmate-home
 .fm-secondmate-parent
 .DS_Store

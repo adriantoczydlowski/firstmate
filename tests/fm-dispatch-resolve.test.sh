@@ -327,6 +327,19 @@ mkdir "$NEVER_SEND"
 reset_log
 TYPESAFE_API_KEY=$KEY run code out err "$PRIVATE_BRIEF" --project pager
 expect_withheld "a directory at the list path" "$NEVER_SEND is not a readable regular file"
+# A task section longer than a pipe buffer, ahead of a later heading, with
+# SIGPIPE ignored as on CI runners: extracting the earlier section must not
+# print a write error beside the one diagnostic line
+LONG_BRIEF="$TMP_ROOT/long-brief.md"
+{
+  printf '# Task\n## Captain'"'"'s intent\nFix the pager.\n\n## Firstmate spec\n'
+  for i in $(seq 20000); do printf -- '- step %s\n' "$i"; done
+} > "$LONG_BRIEF"
+reset_log
+trap '' PIPE
+TYPESAFE_API_KEY=$KEY run code out err "$LONG_BRIEF" --project pager
+trap - PIPE
+expect_withheld "a long brief with SIGPIPE ignored" "$NEVER_SEND is not a readable regular file"
 rmdir "$NEVER_SEND"
 ln -s "$TMP_ROOT/missing-never-send" "$NEVER_SEND"
 reset_log

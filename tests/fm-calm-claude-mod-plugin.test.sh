@@ -8,8 +8,10 @@
 # guard runs by default wherever `claude` is installed; the portable checks that need
 # no Claude Code binary live in tests/fm-calm-claude-mod.test.sh.
 #
-# The early-access function-hooks surface is default-off; the flag is set on this
-# test's own processes only and never written into any settings file.
+# Claude Code before 2.1.286 kept function hooks behind a default-off rollout flag and
+# refused `claude plugin test` without it, so CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 is set
+# on this test's own processes only, never in any settings file; 2.1.286 and later ignore
+# it. The mod itself never reads it: its only switch is the per-home preference.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -50,7 +52,7 @@ test_validate_strict() {
     expect_in_report "$report" "ui.render{component=UserMessage}" "the scan of $path does not hook user rows"
     expect_in_report "$report" "ui.render{component=AssistantMessage}" "the scan of $path does not hook assistant rows"
     expect_in_report "$report" "command.run{command=calm}" "the scan of $path does not serve /calm"
-    expect_in_report "$report" "env reads: CLAUDE_CODE_ENABLE_FUNCTION_HOOKS, FM_CONFIG_OVERRIDE, FM_HOME, FM_ROOT_OVERRIDE, FM_STATE_OVERRIDE" "the scan of $path reads a different environment"
+    expect_in_report "$report" "env reads: FM_CONFIG_OVERRIDE, FM_HOME, FM_ROOT_OVERRIDE, FM_STATE_OVERRIDE" "the scan of $path reads a different environment"
     expect_in_report "$report" "env writes: nothing" "the scan of $path writes the environment"
     expect_in_report "$report" '$.ui.log (via' "the scan of $path does not write supervision notes to the transcript"
     case "$report" in

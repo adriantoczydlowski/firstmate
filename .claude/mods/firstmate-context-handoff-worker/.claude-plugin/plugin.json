@@ -1,0 +1,9 @@
+{
+  "name": "firstmate-context-handoff-worker",
+  "version": "1.0.0",
+  "description": "Firstmate context handoff for Claude Code, worker part: loaded by fm-spawn into Claude ship and scout workers while the launching home's config/context-handoff switch is on; once the worker has used 250k tokens of context it writes its own handoff to <home>/data/<task>/handoff.md and reports one line on its status file.",
+  "author": {
+    "name": "Firstmate",
+    "url": "https://github.com/kunchenguid/firstmate"
+  }
+}

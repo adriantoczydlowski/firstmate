@@ -84,6 +84,9 @@ fm_brief_heading_present() {  # <file> <heading>
 fm_brief_task_heading_body() {  # <file> <heading>
   local task
   task=$(fm_brief_heading_body "$1" "# Task")
+  # A here-string, not a pipe: the parser exits at the next heading, and a
+  # pipe writer would then hit EPIPE and print a write error where SIGPIPE is
+  # ignored, as on CI runners
   fm_brief_heading_parse - "$2" body <<<"$task"
 }
 

@@ -1682,13 +1682,13 @@ claude_worker_add_dirs() {  # <home> <id>
   printf '%s ' "--add-dir '$state_real/operational-inbox' --add-dir '$state_real/$2.inbox' --add-dir '$data_real/$2' --add-dir '$root_real/.agents/skills'"
 }
 
-claude_expected_launch() {  # <launch> <home> <id> <permission-flag>
+claude_expected_launch() {  # <launch> <home> <id> <permission-flag> [<mods-segment>]
   local doorbell quoted
   doorbell=$(claude_launch_brief_arg "$1")
   [ "$(printf '%s' "$doorbell" | "$ROOT/bin/fm-operational-input.sh" doorbell-kind)" = launch-brief ] \
     || doorbell="not a launch-brief doorbell"
   quoted="'$(printf '%s' "$doorbell" | sed "s/'/'\\\\''/g")'"
-  printf '%s' "export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$2" "$3")$(ai_trailer_hooks_prefix "$2" "$3")env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude $4 $(claude_worker_add_dirs "$2" "$3")--settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' $CLAUDE_CONTROL_CHANNEL_FLAG $quoted"
+  printf '%s' "export COMPACT_ADVISER_DISABLE=1; $(task_inbox_export "$2" "$3")$(ai_trailer_hooks_prefix "$2" "$3")env -u CURSOR_AGENT -u CURSOR_INVOKED_AS -u GEMINI_CLI CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false CLAUDE_CODE_SEND_FEEDBACK=0 claude $4 $(claude_worker_add_dirs "$2" "$3")${5:-}--settings '{\"feedbackDrafts\":\"off\",\"attribution\":{\"commit\":\"\",\"pr\":\"\",\"sessionUrl\":false}}' $CLAUDE_CONTROL_CHANNEL_FLAG $quoted"
 }
 
 test_claude_permission_mode_bypass_matches_absent_launch() {
@@ -1799,6 +1799,84 @@ test_claude_permission_mode_invalid_refuses_before_endpoint_or_metadata() {
   pass "an unrecognized config/claude-permission-mode token refuses before any endpoint or metadata"
 }
 
+# config/context-handoff=on adds exactly one --plugin-dir, naming the tracked
+# worker mod under this code root, to a claude ship or scout launch; every other
+# value, a secondmate, and every other harness keep the launch unchanged.
+test_context_handoff_on_loads_the_worker_mod_into_claude_ships_and_scouts() {
+  local kind rec id out status launch expected mod
+  mod="--plugin-dir '$(cd "$ROOT/.claude/mods/firstmate-context-handoff-worker" && pwd -P)' "
+  for kind in ship scout; do
+    id="handoff-on-$kind-z24"
+    rec=$(make_spawn_case "handoff-on-$kind" claude "$id")
+    read_case_record "$rec"
+    printf ' on\n' > "$HOME_DIR/config/context-handoff"
+    if [ "$kind" = ship ]; then
+      out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+    else
+      out=$(run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --scout)
+    fi
+    status=$?
+    expect_code 0 "$status" "claude $kind spawn with context-handoff on should succeed"$'\n'"$out"
+    launch=$(cat "$LAUNCH_LOG")
+    if [ "$kind" = ship ]; then
+      expected=$(claude_expected_launch "$launch" "$HOME_DIR" "$id" --dangerously-skip-permissions "$mod")
+      [ "$launch" = "$expected" ] || fail "context-handoff on changed more than the worker mod load"$'\n'"expected: $expected"$'\n'"actual:   $launch"
+    else
+      assert_contains "$launch" "$mod--settings" "the scout launch did not load the context-handoff worker mod"
+    fi
+  done
+  pass "config/context-handoff=on loads the worker mod into claude ship and scout launches and changes nothing else"
+}
+
+test_context_handoff_other_values_keep_the_launch_unchanged() {
+  local value rec id out status launch expected n=0
+  for value in off yes ''; do
+    n=$((n + 1))
+    id="handoff-off-$n-z25"
+    rec=$(make_spawn_case "handoff-off-$n" claude "$id")
+    read_case_record "$rec"
+    printf '%s\n' "$value" > "$HOME_DIR/config/context-handoff"
+    out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR")
+    status=$?
+    expect_code 0 "$status" "claude spawn with context-handoff '$value' should succeed"$'\n'"$out"
+    launch=$(cat "$LAUNCH_LOG")
+    expected=$(claude_expected_launch "$launch" "$HOME_DIR" "$id" --dangerously-skip-permissions)
+    [ "$launch" = "$expected" ] || fail "context-handoff '$value' changed the launch"$'\n'"expected: $expected"$'\n'"actual:   $launch"
+  done
+  pass "config/context-handoff values other than on launch exactly as an absent file does"
+}
+
+test_context_handoff_skips_secondmates_and_other_harnesses() {
+  local rec id sm out status launch
+  id=handoff-codex-z26
+  rec=$(make_spawn_case handoff-codex codex "$id")
+  read_case_record "$rec"
+  printf 'on\n' > "$HOME_DIR/config/context-handoff"
+  out=$(run_ship_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$PROJ_DIR" --harness codex)
+  status=$?
+  expect_code 0 "$status" "codex spawn with context-handoff on should succeed"$'\n'"$out"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "codex " "codex launch did not run codex"
+  assert_not_contains "$launch" "--plugin-dir" "the context-handoff worker mod must not reach a codex launch"
+
+  id=handoff-secondmate-z27
+  rec=$(make_spawn_case handoff-secondmate claude "$id")
+  read_case_record "$rec"
+  printf 'on\n' > "$HOME_DIR/config/context-handoff"
+  sm="$CASE_DIR/secondmate-home"
+  make_seeded_secondmate_home "$sm" "$id"
+  out=$(FM_TEST_CLAUDE_CONFIG_DIR="$CASE_DIR/claude-work" \
+    run_spawn "$HOME_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$LAUNCH_LOG" "$id" "$sm" --secondmate)
+  status=$?
+  expect_code 0 "$status" "secondmate claude spawn with context-handoff on should succeed"$'\n'"$out"
+  launch=$(cat "$LAUNCH_LOG")
+  assert_contains "$launch" "claude " "secondmate launch did not run claude"
+  assert_not_contains "$launch" "--plugin-dir" "a secondmate launch must not load the worker mod"
+  [ "$(cat "$sm/config/context-handoff" 2>/dev/null)" = on ] \
+    || fail "the secondmate home did not inherit config/context-handoff"
+  pass "config/context-handoff skips secondmate and non-claude launches, and a secondmate home inherits the switch"
+}
+
 test_non_claude_harness_ignores_claude_permission_mode() {
   local rec id out status launch
   id=permmode-codex-z23
@@ -1816,6 +1894,9 @@ test_non_claude_harness_ignores_claude_permission_mode() {
 }
 
 test_worker_launch_delivers_role_scope
+test_context_handoff_on_loads_the_worker_mod_into_claude_ships_and_scouts
+test_context_handoff_other_values_keep_the_launch_unchanged
+test_context_handoff_skips_secondmates_and_other_harnesses
 test_no_profile_keeps_claude_profile_defaults
 test_claude_launch_brief_publishes_record_doorbell
 test_claude_secondmate_launch_brief_publishes_into_its_own_home

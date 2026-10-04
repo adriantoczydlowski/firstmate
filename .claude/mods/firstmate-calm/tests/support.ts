@@ -30,6 +30,8 @@ export type Journal = {
   configLists: number;
   /** Every `$.ui.log` line, in order. */
   logs: string[];
+  /** Number of `$.clock.every` periods the mod's timers asked of the clock. */
+  clockPeriods: number;
 };
 
 export type World = {
@@ -51,8 +53,6 @@ export type WorldOptions = {
   preference?: string;
   /** Extra environment beside FM_HOME; pass `{}` with `home: undefined` to unset FM_HOME. */
   env?: Record<string, string>;
-  /** Function-hooks opt-in value; omitted options default to the active value `1`. */
-  functionHooks?: string | undefined;
   /** The Firstmate home FM_HOME names; undefined leaves FM_HOME unset. */
   home?: string | undefined;
   /** What `$.session.messages()` answers. */
@@ -66,13 +66,23 @@ export const STOCK_TEXT = "STOCK-DRAWING";
 
 export function world(on: On, options: WorldOptions = {}): World {
   const home = "home" in options ? options.home : HOME;
-  const functionHooks = "functionHooks" in options ? options.functionHooks : "1";
   mock.env(on, {
     ...(home === undefined ? {} : { FM_HOME: home }),
     ...(options.env ?? {}),
-    ...(functionHooks === undefined ? {} : { CLAUDE_CODE_ENABLE_FUNCTION_HOOKS: functionHooks }),
   });
-  const clock = mock.clock(on);
+  // The mocked clock answers `clock.every` itself; counting through its own hook sees
+  // every period a timer of the mod's asks for.
+  const countingOn = ((event: string, ...rest: unknown[]) => {
+    const handler = rest.at(-1);
+    if (event === "clock.every" && typeof handler === "function") {
+      rest[rest.length - 1] = (...args: unknown[]) => {
+        journal.clockPeriods += 1;
+        return handler(...args);
+      };
+    }
+    return (on as (...args: unknown[]) => unknown)(event, ...rest);
+  }) as On;
+  const clock = mock.clock(countingOn);
   mock.store(on);
   let sessionId = "session-1";
   const files = new Map<string, string>();
@@ -88,6 +98,7 @@ export function world(on: On, options: WorldOptions = {}): World {
     sessionMessageReads: 0,
     configLists: 0,
     logs: [],
+    clockPeriods: 0,
   };
   let theme: unknown = "theme" in options ? options.theme : "dark";
   let blitDenial: string | undefined;
