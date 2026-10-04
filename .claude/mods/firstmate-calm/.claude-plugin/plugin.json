@@ -1,5 +1,5 @@
 {
-  "name": "firstmate-calm",
+  "name": "fm",
   "version": "1.0.0",
   "description": "Firstmate Calm for Claude Code: the sailboat working animation and conversation-only transcript presentation, sharing the per-home config/calm preference with the Pi Calm extension. Claude Code 2.1.286 and later load its hooks module by default and ignore CLAUDE_CODE_ENABLE_FUNCTION_HOOKS; Calm's only switch is that preference, toggled by /calm, and while it is off or absent the mod changes no drawing.",
   "author": {

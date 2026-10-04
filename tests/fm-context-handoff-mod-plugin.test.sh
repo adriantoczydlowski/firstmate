@@ -47,7 +47,7 @@ test_validate_main_window_part() {
     report=$(validate "$path")
     # The scan is the engine's own reading of the module: the events it will hook
     # and the environment names it may read. Anything more or less is a drift.
-    expect_in_report "$report" "hooks: session.measure, turn.complete, command.run{command=stow}, session.end, ui.render{component=AbovePrompt}" \
+    expect_in_report "$report" "hooks: session.start, session.measure, turn.complete, command.run{command=stow}, session.end, ui.render{component=AbovePrompt}" \
       "the scan of $path hooks a different set of events"
     expect_in_report "$report" "env reads: COMPACT_ADVISER_DISABLE, FM_CONFIG_OVERRIDE, FM_HOME, FM_ROOT_OVERRIDE, FM_TASK_ID" \
       "the scan of $path reads a different environment"
@@ -65,7 +65,7 @@ test_validate_main_window_part() {
 test_validate_worker_part() {
   local report
   report=$(validate "$WORKER")
-  expect_in_report "$report" "hooks: session.measure, tool.call" "the worker part hooks a different set of events"
+  expect_in_report "$report" "hooks: session.start, session.measure, tool.call" "the worker part hooks a different set of events"
   expect_in_report "$report" "env reads: FM_TASK_ID, HOME" "the worker part reads a different environment"
   expect_in_report "$report" "env writes: nothing" "the worker part writes the environment"
   case "$report" in

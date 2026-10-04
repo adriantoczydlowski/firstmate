@@ -145,18 +145,16 @@ fm_quota_single_provider_table() {
     'muse meta'
 }
 
+# Reads the whole table before answering: leaving the loop early closes the
+# pipe mid-write, and where SIGPIPE is ignored the writer prints a broken-pipe
+# error on stderr.
 fm_quota_single_provider_for_harness() {
-  local harness provider
-  # A here-string, not a process substitution: the loop returns at the first
-  # match, and the table writer would then hit EPIPE and print a write error
-  # where SIGPIPE is ignored, as on CI runners
+  local harness provider found=''
   while read -r harness provider; do
-    if [ "$harness" = "$1" ]; then
-      printf '%s\n' "$provider"
-      return 0
-    fi
-  done <<<"$(fm_quota_single_provider_table)"
-  return 1
+    [ -z "$found" ] && [ "$harness" = "$1" ] && found=$provider || :
+  done < <(fm_quota_single_provider_table)
+  [ -n "$found" ] || return 1
+  printf '%s\n' "$found"
 }
 
 fm_quota_provider_for_harness() {

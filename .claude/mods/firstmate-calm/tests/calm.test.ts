@@ -42,7 +42,9 @@ describe("activation", () => {
     expect(journal.blits).toHaveLength(0);
     expect(journal.invalidations).toHaveLength(0);
     expect(journal.toasts).toHaveLength(0);
-    expect(journal.fsReads).toEqual([PREFERENCE]);
+    // A missing preference is found absent before any read, so only a stored one is read.
+    expect(journal.fsReads).toEqual(options.preference === undefined ? [] : [PREFERENCE]);
+    expect(journal.logs).toHaveLength(0);
     expect(journal.sessionMessageReads).toBe(0);
     expect(journal.configLists).toBe(0);
   }
@@ -393,7 +395,7 @@ describe("mid-turn working notes", () => {
       result: { answer: "Done.", toolUses: [{ name: "Bash", input: {} }], stopReason: "tool_use" },
     });
     await runStep($);
-    expect(journal.fsReads).toHaveLength(2);
+    expect(journal.fsReads.filter((path) => path === PREFERENCE)).toHaveLength(2);
     expect(journal.sessionMessageReads).toBe(2);
     expect(isHidden(await $.ui.render(assistantMessage("Done.", "session-two-note")))).toBe(true);
   });

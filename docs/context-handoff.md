@@ -123,6 +123,11 @@ Firstmate **only notes it**: it does not relaunch the worker on that handoff.
 250k used is an early courtesy point, and a relaunch there would throw away three quarters of a healthy session.
 The handoff stays on disk for the moment a relaunch is actually needed, such as the 25%-remaining checkpoint or a recovery.
 
+## Session resets
+
+Both parts wipe their in-memory state at `session.start`, so a resumed or continued session (for example Claude Code's native `--continue`) never reuses phase, receipt, or usage figures left over from an earlier session's lifetime; each part re-arms as if freshly loaded.
+The main-window part keeps one exception: a carry already pending for the next session (queued by **Clear and carry handoff** or a hand-typed `/clear`) survives the reset, so the receipt still lands in the fresh session even when that session's own `session.start` fires before the deferred carry runs.
+
 ## Failure behavior
 
 | Situation | What the person sees |
@@ -137,6 +142,7 @@ The handoff stays on disk for the moment a relaunch is actually needed, such as 
 | `/clear` refused | `/clear` is filled into the prompt with the notice `Press Enter to clear; the handoff follows into the new session.`; Enter clears and the receipt follows. |
 | The carry fails after the clear | A plain `/clear`: a fresh session without the receipt, while the stowed memory stays on disk. |
 | The worker's brief names no status file, its launch record cannot be read, or the worker has no `/handoff` | No row, no command, no status line. |
+| Idle, the worker's own `/handoff` run is refused (busy, engine error) | No handoff file, no status line; the worker goes quiet on that crossing and waits for the next one. |
 | The worker's status file cannot be read, or its last line is a state other than `working` or `resolved` | The handoff is written; no status line. |
 | The worker part's folder is missing when a worker launches | `fm-spawn` warns and launches the worker without it. |
 

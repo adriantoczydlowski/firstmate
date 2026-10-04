@@ -77,6 +77,7 @@ function world(on: On, options: WorldOptions = {}) {
     return { value: undefined }
   })
   on('session.end', async (_$, e) => ({ sessionId: e.sessionId }))
+  on('session.start', async (_$, e) => ({ cwd: e.cwd }))
   on('turn.complete', async (_$, e) => ({ text: e.answer }))
   on('session.measure', async (_$, e) => ({ changed: e.changed }))
   on('ui.render', async () => ({ type: 'Text', props: {}, children: [STOCK] }))
@@ -299,6 +300,39 @@ describe('other session kinds', () => {
     expect(isStock(await band($))).toBe(true)
     expect(journal.commands).toHaveLength(0)
     expect(journal.reads).toHaveLength(0)
+  })
+})
+
+describe('session lifecycle', () => {
+  test('a second session.start without an intervening clear wipes the band back to idle', async ($, on) => {
+    const { journal } = world(on)
+    await measure($, 250_000)
+    await band($)
+    await $.ui.press({ plugin: PLUGIN, key: 'stow' })
+    await complete($, RECEIPT)
+    expect(shown(await band($))).toContain('Clear and carry handoff')
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true } as never)
+    expect(isStock(await band($))).toBe(true)
+    await measure($, 260_000)
+    expect(shown(await band($))).toContain('260k tokens of context used')
+    await band($)
+    await $.ui.press({ plugin: PLUGIN, key: 'stow' })
+    await complete($, RECEIPT)
+    await band($)
+    await $.ui.press({ plugin: PLUGIN, key: 'clear' })
+    expect(journal.logs.filter(l => CARRYING.test(l))).toHaveLength(1)
+  })
+
+  test('a session.start that lands before the deferred clear-carry fires does not drop the pending carry', async ($, on) => {
+    const { journal, clock } = world(on)
+    await measure($, 300_000)
+    await band($)
+    await $.ui.press({ plugin: PLUGIN, key: 'stow' })
+    await complete($, RECEIPT)
+    await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } } as never)
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true } as never)
+    await clock.settle()
+    expect(journal.logs.filter(l => CARRYING.test(l))).toHaveLength(1)
   })
 })
 
