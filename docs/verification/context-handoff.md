@@ -28,11 +28,12 @@ $ claude plugin test .claude/mods/firstmate-context-handoff
  0 fail
 
 $ claude plugin test .claude/mods/firstmate-context-handoff-worker
- 17 pass
+ 18 pass
  0 fail
 ```
 
 The `session.start` hook, added to both parts to reset in-memory state on a resumed or continued session ([`context-handoff.md`](../context-handoff.md#session-resets)), is reflected above: the main-window suite gained two tests, for that reset and for the pending carry it preserves, and the worker suite gained one, for its reset.
+The worker suite's other extra test covers a refused idle `/handoff` resetting the phase to `done` instead of leaving the request stuck ([`context-handoff.md`](../context-handoff.md#failure-behavior)).
 
 ## 2026-10-03 Claude Code 2.1.288
 
