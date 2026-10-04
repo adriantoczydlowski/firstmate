@@ -109,7 +109,10 @@ test_the_bound_replaces_the_calling_shell() {
     rm -f "$dir/caller" "$dir/parent"
     (
       . "$ROOT/bin/fm-timeout-lib.sh"
-      printf '%s\n' "$BASHPID" > "$dir/caller"
+      # Bash 3.2 defines no BASHPID, and $$ names the main shell rather than
+      # this subshell, so recover the frame pid the way fm_current_pid does in
+      # bin/fm-wake-lib.sh: the exec'd child's PPID is this subshell.
+      printf '%s\n' "${BASHPID:-$(exec sh -c 'printf "%s\n" "$PPID"')}" > "$dir/caller"
       PATH=$path fm_exec_timed 5 1 bash -c 'echo "$PPID" > "$1"' _ "$dir/parent"
     ) || fail "the bounded probe failed under PATH=$path"
     caller=$(cat "$dir/caller")

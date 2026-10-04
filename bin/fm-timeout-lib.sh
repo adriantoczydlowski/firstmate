@@ -221,7 +221,18 @@ fm_exec_timed() {  # <seconds> <grace-seconds> <command...>
     exit 125
   fi
   owner=${FM_EXEC_TIMED_OWNER_PID:-$$}
-  [ "$owner" != "$BASHPID" ] || owner=$PPID
+  # Bash 3.2, which macOS still ships, defines no BASHPID, so a bare expansion
+  # aborts this library under `set -u`. fm_current_pid in bin/fm-wake-lib.sh
+  # recovers the frame pid by exec'ing a child shell, but that file sources this
+  # one, and this function also runs under a stripped PATH where `sh` may be
+  # absent. BASH_SUBSHELL answers the same question without forking: at level 0
+  # the default owner $$ IS this frame, while inside a subshell $$ already names
+  # a different process and stands on its own.
+  if [ -n "${BASHPID:-}" ]; then
+    [ "$owner" != "$BASHPID" ] || owner=$PPID
+  elif [ "$owner" = "$$" ] && [ "${BASH_SUBSHELL:-0}" -eq 0 ]; then
+    owner=$PPID
+  fi
   unset FM_EXEC_TIMED_OWNER_PID
   if command -v perl >/dev/null 2>&1; then
     exec perl -MPOSIX=WNOHANG,setpgid -MTime::HiRes=time -e '
