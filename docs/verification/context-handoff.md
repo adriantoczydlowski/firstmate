@@ -32,7 +32,9 @@ $ claude plugin test .claude/mods/firstmate-context-handoff-worker
  0 fail
 ```
 
-The `session.start` hook, added to both parts to reset in-memory state on a resumed or continued session ([`context-handoff.md`](../context-handoff.md#session-resets)), is reflected above; the two extra passing tests per part cover that reset and the preserved pending-carry case.
+The `session.start` hook, added to both parts to reset in-memory state on a resumed or continued session ([`context-handoff.md`](../context-handoff.md#session-resets)), is reflected above: the main-window suite gained two tests, for that reset and for the pending carry it preserves, and the worker suite gained one, for its reset.
+
+## 2026-10-03 Claude Code 2.1.288
 
 `tsc -p .` with TypeScript 5.6 against the engine-written declarations is clean in both folders.
 The 2.1.288 test kit never routes a plugin's own `$.session.append` to a test's `session.append` hook, so the suites observe the append through the mods' debug lines and the live runs below carry the proof that the row lands.
