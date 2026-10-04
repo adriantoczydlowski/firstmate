@@ -135,7 +135,6 @@ async function rearm($: EngineInterface): Promise<void> {
 /** A fresh or resumed session starts with no crossing in flight: wipe every mutable field. */
 async function resetSession($: EngineInterface): Promise<void> {
   S.kind = undefined
-  S.carryPending = undefined
   S.stowRunning = false
   S.firing = false
   S.receipt = undefined

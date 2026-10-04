@@ -322,6 +322,18 @@ describe('session lifecycle', () => {
     await $.ui.press({ plugin: PLUGIN, key: 'clear' })
     expect(journal.logs.filter(l => CARRYING.test(l))).toHaveLength(1)
   })
+
+  test('a session.start that lands before the deferred clear-carry fires does not drop the pending carry', async ($, on) => {
+    const { journal, clock } = world(on)
+    await measure($, 300_000)
+    await band($)
+    await $.ui.press({ plugin: PLUGIN, key: 'stow' })
+    await complete($, RECEIPT)
+    await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } } as never)
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true } as never)
+    await clock.settle()
+    expect(journal.logs.filter(l => CARRYING.test(l))).toHaveLength(1)
+  })
 })
 
 describe('failure', () => {
