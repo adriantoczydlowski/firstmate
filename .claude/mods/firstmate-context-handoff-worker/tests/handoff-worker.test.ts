@@ -80,6 +80,7 @@ function world(on: On, options: WorldOptions = {}) {
     return { value: undefined }
   })
   on('session.measure', async (_$, e) => ({ changed: e.changed }))
+  on('session.start', async (_$, e) => ({ cwd: e.cwd }))
   on('tool.call', async () => ({ result: 'ok' }) as never)
   return {
     clock,
@@ -245,6 +246,17 @@ describe('Firstmate worker', () => {
     await bash($)
     expect(journal.commands).toHaveLength(0)
     expect(journal.processes).toHaveLength(0)
+  })
+})
+
+describe('session lifecycle', () => {
+  test('a second session.start without an intervening re-arm asks for the handoff again', async ($, on) => {
+    const { journal } = world(on, { tokens: 251_000 })
+    await bash($)
+    expect(journal.logs.filter(l => l.startsWith(`worker ${TASK}: requesting the handoff mid-turn`))).toHaveLength(1)
+    await $.session.start({ cwd: '/work', surface: 'terminal', isInteractive: true } as never)
+    await bash($)
+    expect(journal.logs.filter(l => l.startsWith(`worker ${TASK}: requesting the handoff mid-turn`))).toHaveLength(2)
   })
 })
 

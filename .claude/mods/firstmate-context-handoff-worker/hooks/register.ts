@@ -127,6 +127,16 @@ function rearm(): void {
   S.handoffPath = undefined
 }
 
+/** A fresh or resumed session starts with no crossing in flight: wipe every mutable field. */
+function resetSession(): void {
+  S.kind = undefined
+  S.phase = 'idle'
+  S.statusPath = undefined
+  S.handoffPath = undefined
+  S.requestedAt = 0
+  S.firing = false
+}
+
 async function handoffSkillText($: EngineInterface): Promise<string | undefined> {
   const home = await $.env.get('HOME')
   const paths = [`${await $.session.root()}/.claude/skills/handoff/SKILL.md`]
@@ -233,6 +243,13 @@ async function guarded($: EngineInterface, label: string, work: () => Promise<vo
 }
 
 export const register: Register = on => {
+  // A resumed or continued session can reuse this module's state from an earlier
+  // session's lifetime; wipe it before anything else reads or writes it.
+  on('session.start', async ($, e, next) => {
+    await guarded($, 'session.start', async () => resetSession())
+    return next(e)
+  })
+
   // The cheap trigger: pushed after each main-thread turn, the figures in `e`.
   on('session.measure', async ($, e, next) => {
     await guarded($, 'measure', async () => {
