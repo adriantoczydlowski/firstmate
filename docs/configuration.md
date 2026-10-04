@@ -641,7 +641,7 @@ There is no shared learnings file by captain decision.
 ## Time tracking (config/time-tracking-*, data/time-tracking/)
 
 `bin/fm-time.sh` proposes candidate work windows from this home's own durable evidence, records nothing until the captain approves or corrects each one, and reports a month-end breakdown of hours by project and task with after-hours called out separately.
-It is a standalone command the captain runs directly; nothing in Firstmate's own operating loop invokes it.
+Propose, approve, reject, split, start, stop, log, and report are standalone commands the captain runs directly; `bin/fm-teardown.sh` is the one exception, running `fm-time.sh capture` to save a task's evidence before its status log and task record are cleaned up.
 All of its records live locally under this home's gitignored `data/time-tracking/`, and its optional tuning knobs live under gitignored `config/time-tracking-*` files.
 The script's own header and `bin/fm-time.sh --help` are the single owner of exact evidence sources, storage format, and configuration keys.
 
