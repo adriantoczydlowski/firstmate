@@ -132,7 +132,9 @@ async function rearm($: EngineInterface): Promise<void> {
   await setPhase($, 'idle')
 }
 
-/** A fresh or resumed session starts with no crossing in flight: wipe every mutable field. */
+/** A fresh or resumed session starts with no crossing in flight: wipe every mutable field
+ * except a carry already pending for this session, which a deferred session.end carry
+ * may still be about to append. */
 async function resetSession($: EngineInterface): Promise<void> {
   S.kind = undefined
   S.stowRunning = false

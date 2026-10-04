@@ -123,6 +123,11 @@ Firstmate **only notes it**: it does not relaunch the worker on that handoff.
 250k used is an early courtesy point, and a relaunch there would throw away three quarters of a healthy session.
 The handoff stays on disk for the moment a relaunch is actually needed, such as the 25%-remaining checkpoint or a recovery.
 
+## Session resets
+
+Both parts wipe their in-memory state at `session.start`, so a resumed or continued session (for example Claude Code's native `--continue`) never reuses phase, receipt, or usage figures left over from an earlier session's lifetime; each part re-arms as if freshly loaded.
+The main-window part keeps one exception: a carry already pending for the next session (queued by **Clear and carry handoff** or a hand-typed `/clear`) survives the reset, so the receipt still lands in the fresh session even when that session's own `session.start` fires before the deferred carry runs.
+
 ## Failure behavior
 
 | Situation | What the person sees |
