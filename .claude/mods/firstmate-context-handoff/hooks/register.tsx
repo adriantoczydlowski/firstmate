@@ -132,6 +132,18 @@ async function rearm($: EngineInterface): Promise<void> {
   await setPhase($, 'idle')
 }
 
+/** A fresh or resumed session starts with no crossing in flight: wipe every mutable field
+ * except a carry already pending for this session, which a deferred session.end carry
+ * may still be about to append. */
+async function resetSession($: EngineInterface): Promise<void> {
+  S.kind = undefined
+  S.stowRunning = false
+  S.firing = false
+  S.receipt = undefined
+  await setPhase($, 'idle')
+  await update($, usedTokens, () => 0)
+}
+
 async function carry($: EngineInterface): Promise<void> {
   const text = S.carryPending
   if (text === undefined) return
@@ -186,6 +198,13 @@ async function guarded($: EngineInterface, label: string, work: () => Promise<vo
 }
 
 export const register: Register = on => {
+  // A resumed or continued session can reuse this module's state from an earlier
+  // session's lifetime; wipe it before anything else reads or writes it.
+  on('session.start', async ($, e, next) => {
+    await guarded($, 'session.start', () => resetSession($))
+    return next(e)
+  })
+
   // The cheap trigger: pushed after each main-thread turn, the figures in `e`.
   on('session.measure', async ($, e, next) => {
     if (e.changed.includes('context')) await guarded($, 'measure', () => check($, e.context.tokens))

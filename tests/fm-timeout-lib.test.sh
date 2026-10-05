@@ -214,7 +214,9 @@ test_an_owner_that_dies_during_startup_ends_the_command() {
   PATH=$PERL_ONLY bash -c '
     . "$1/bin/fm-timeout-lib.sh"
     (
-      echo "$BASHPID" > "$2/watchdog"
+      # Bash 3.2 defines no BASHPID. A bash exec-ed here is a child of this
+      # subshell, so its PPID names the subshell; bash is already on PERL_ONLY.
+      echo "${BASHPID:-$(exec bash -c "echo \$PPID")}" > "$2/watchdog"
       while kill -0 "$$" 2>/dev/null; do sleep 0.05; done
       fm_exec_timed 60 1 bash -c "exec sleep 300"
     ) >/dev/null 2>&1 &

@@ -3,34 +3,39 @@
 This record holds the empirical evidence behind the support bounds in [`context-handoff.md`](../context-handoff.md).
 `tests/fm-context-handoff-mod-plugin.test.sh` refreshes the engine checks wherever `claude` is installed; the live runs below are manual.
 
-## 2026-10-03 Claude Code 2.1.288
+## 2026-10-04 Claude Code 2.1.289
 
 ### Engine checks
 
 ```text
 $ claude --version
-2.1.288 (Claude Code)
+2.1.289 (Claude Code)
 
 $ claude plugin validate --strict .claude/mods/firstmate-context-handoff
-  ❯ ./register.tsx hooks: session.measure, turn.complete, command.run{command=stow}, session.end, ui.render{component=AbovePrompt}
+  ❯ ./register.tsx hooks: session.start, session.measure, turn.complete, command.run{command=stow}, session.end, ui.render{component=AbovePrompt}
   ❯ ./register.tsx env writes: nothing
   ❯ ./register.tsx env reads: COMPACT_ADVISER_DISABLE, FM_CONFIG_OVERRIDE, FM_HOME, FM_ROOT_OVERRIDE, FM_TASK_ID
 ✔ Validation passed
 
 $ claude plugin validate --strict .claude/mods/firstmate-context-handoff-worker
-  ❯ ./register.ts hooks: session.measure, tool.call
+  ❯ ./register.ts hooks: session.start, session.measure, tool.call
   ❯ ./register.ts env writes: nothing
   ❯ ./register.ts env reads: FM_TASK_ID, HOME
 ✔ Validation passed
 
 $ claude plugin test .claude/mods/firstmate-context-handoff
- 18 pass
+ 20 pass
  0 fail
 
 $ claude plugin test .claude/mods/firstmate-context-handoff-worker
- 16 pass
+ 18 pass
  0 fail
 ```
+
+The `session.start` hook, added to both parts to reset in-memory state on a resumed or continued session ([`context-handoff.md`](../context-handoff.md#session-resets)), is reflected above: the main-window suite gained two tests, for that reset and for the pending carry it preserves, and the worker suite gained one, for its reset.
+The worker suite's other extra test covers a refused idle `/handoff` resetting the phase to `done` instead of leaving the request stuck ([`context-handoff.md`](../context-handoff.md#failure-behavior)).
+
+## 2026-10-03 Claude Code 2.1.288
 
 `tsc -p .` with TypeScript 5.6 against the engine-written declarations is clean in both folders.
 The 2.1.288 test kit never routes a plugin's own `$.session.append` to a test's `session.append` hook, so the suites observe the append through the mods' debug lines and the live runs below carry the proof that the row lands.
