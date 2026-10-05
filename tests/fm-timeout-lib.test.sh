@@ -109,7 +109,10 @@ test_the_bound_replaces_the_calling_shell() {
     rm -f "$dir/caller" "$dir/parent"
     (
       . "$ROOT/bin/fm-timeout-lib.sh"
-      printf '%s\n' "$BASHPID" > "$dir/caller"
+      # Bash 3.2 defines no BASHPID, and $$ names the main shell rather than
+      # this subshell, so recover the frame pid the way fm_current_pid does in
+      # bin/fm-wake-lib.sh: the exec'd child's PPID is this subshell.
+      printf '%s\n' "${BASHPID:-$(exec sh -c 'printf "%s\n" "$PPID"')}" > "$dir/caller"
       PATH=$path fm_exec_timed 5 1 bash -c 'echo "$PPID" > "$1"' _ "$dir/parent"
     ) || fail "the bounded probe failed under PATH=$path"
     caller=$(cat "$dir/caller")
@@ -211,7 +214,9 @@ test_an_owner_that_dies_during_startup_ends_the_command() {
   PATH=$PERL_ONLY bash -c '
     . "$1/bin/fm-timeout-lib.sh"
     (
-      echo "$BASHPID" > "$2/watchdog"
+      # Bash 3.2 defines no BASHPID. A bash exec-ed here is a child of this
+      # subshell, so its PPID names the subshell; bash is already on PERL_ONLY.
+      echo "${BASHPID:-$(exec bash -c "echo \$PPID")}" > "$2/watchdog"
       while kill -0 "$$" 2>/dev/null; do sleep 0.05; done
       fm_exec_timed 60 1 bash -c "exec sleep 300"
     ) >/dev/null 2>&1 &
