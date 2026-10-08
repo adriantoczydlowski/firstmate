@@ -605,6 +605,14 @@
     {
       "path": ".agents/skills/validation-supervision/SKILL.md",
       "audience": "agent-runtime"
+    },
+    {
+      "path": "plugins/claude-skins/README.md",
+      "audience": "operator-example"
+    },
+    {
+      "path": "plugins/firstmate-fleet-panel/README.md",
+      "audience": "operator-example"
     }
   ]
 }
