@@ -43,7 +43,7 @@ const PANE_PROPS = {
   view: {},
 }
 
-function engine(on: On) {
+function engine(on: On, cwd = HOME) {
   const runs: Args<'process.run'>[] = []
   const writes: string[] = []
   const statuses: (string | undefined)[] = []
@@ -51,6 +51,7 @@ function engine(on: On) {
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   on('command.register', ($, e) => ({ value: { command: e.name } }))
   on('env.get', () => ({ value: undefined }))
+  on('session.cwd', () => ({ value: cwd }))
   on('process.run', ($, e) => {
     runs.push(e)
     return { value: { exitCode: 0, stdout: SNAPSHOT, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -133,4 +134,55 @@ describe('firstmate-fleet-panel', () => {
       expect(world.statuses.at(-1)).toBe('fleet: 1 working · 1 blocked · wakes 2')
     },
   )
+
+  // A /clear goes on under a new session: its state reads empty and no
+  // session.start fires, so /fleet must find the home on its own.
+  test('after a /clear, /fleet observes the session directory', async ($, on) => {
+    const world = engine(on)
+    const opened = await $.command.run({
+      command: 'fleet',
+      args: '',
+      origin: { kind: 'composer' },
+      presentation: { isFullscreen: true, columns: 160 },
+    })
+    expect(opened).toEqual({ text: `Firstmate fleet: observing ${HOME}` })
+
+    const ui = await $.ui.mount({
+      plugin: 'firstmate-fleet-panel',
+      surface: 'terminal',
+      component: 'Pane',
+      requestId: 'firstmate-fleet',
+      props: PANE_PROPS,
+    })
+    await ui.press({ key: 'refresh' })
+    const texts = (await ui.findAll({ type: 'Text' })).map(found => found.text)
+    expect(world.runs.length).toBeGreaterThan(0)
+    expect(world.runs.every(run => run.argv[0] === `${HOME}/bin/fm-fleet-snapshot.sh` && run.init?.cwd === HOME)).toBe(true)
+    expect(texts.some(text => text.startsWith('snapshot failed'))).toBe(false)
+    expect(texts.some(text => text.includes('fix-login') && text.includes('ship'))).toBe(true)
+  })
+
+  test('with no home to observe, the pane says so and runs nothing', async ($, on) => {
+    const world = engine(on, '')
+    const opened = await $.command.run({
+      command: 'fleet',
+      args: '',
+      origin: { kind: 'composer' },
+      presentation: { isFullscreen: true, columns: 160 },
+    })
+    expect(opened.text).toContain('no Firstmate home to observe')
+
+    const ui = await $.ui.mount({
+      plugin: 'firstmate-fleet-panel',
+      surface: 'terminal',
+      component: 'Pane',
+      requestId: 'firstmate-fleet',
+      props: PANE_PROPS,
+    })
+    await ui.press({ key: 'refresh' })
+    const texts = (await ui.findAll({ type: 'Text' })).map(found => found.text)
+    expect(world.runs).toEqual([])
+    expect(texts.some(text => text.includes('no Firstmate home to observe: set the fmHome option or FM_HOME'))).toBe(true)
+    expect(texts.some(text => text.includes('init.cwd'))).toBe(false)
+  })
 })

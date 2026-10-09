@@ -21,6 +21,7 @@ const WAKES_EVERY_MS = 5_000
 const FLEET_EVERY_MS = 30_000
 const SNAPSHOT_TIMEOUT_MS = 60_000
 const WAKES_SHOWN = 8
+const NO_HOME = 'no Firstmate home to observe: set the fmHome option or FM_HOME, or start Claude Code in a Firstmate home'
 
 const EMPTY: Reading = {
   fleet: null,
@@ -51,13 +52,26 @@ async function showStatus($: EngineInterface): Promise<void> {
   $.ui.status(summary(r.fleet, r.wakes))
 }
 
-async function refreshWakes($: EngineInterface): Promise<void> {
-  const root = await read($, home)
+// The observed home: the fmHome option, else $FM_HOME, else the session's
+// directory, held in `home` once found. It is found when first needed, not
+// only in session.start: a /clear goes on under a new session whose `home`
+// reads empty, and no session.start fires for it. Empty when nothing names one.
+async function fleetHome($: EngineInterface, configured: string): Promise<string> {
+  const held = await read($, home)
+  if (held !== '') return held
+  const found = configured || (await $.env.get('FM_HOME')) || (await $.session.cwd())
+  const root = (found ?? '').replace(/\/+$/, '')
+  if (root !== '') await update($, home, () => root)
+  return root
+}
+
+async function refreshWakes($: EngineInterface, configured: string): Promise<void> {
+  const root = await fleetHome($, configured)
   const path = `${root}/state/.wake-queue`
   let wakes = EMPTY.wakes
   let wakesError = ''
   try {
-    if (await $.fs.exists(path)) wakes = parseWakeQueue(await $.fs.read(path))
+    if (root !== '' && (await $.fs.exists(path))) wakes = parseWakeQueue(await $.fs.read(path))
   } catch (error) {
     wakesError = String(error)
   }
@@ -67,13 +81,14 @@ async function refreshWakes($: EngineInterface): Promise<void> {
   await showStatus($)
 }
 
-async function refreshFleet($: EngineInterface): Promise<void> {
+async function refreshFleet($: EngineInterface, configured: string): Promise<void> {
   if ((await read($, reading)).isRefreshing) return
   await update($, reading, r => ({ ...r, isRefreshing: true }))
-  const root = await read($, home)
   let fleet: Reading['fleet'] = null
   let fleetError = ''
   try {
+    const root = await fleetHome($, configured)
+    if (root === '') throw new Error(NO_HOME)
     const ran = await $.process.run([`${root}/bin/fm-fleet-snapshot.sh`, '--json'], {
       cwd: root,
       // FM_CREW_STATE_NO_FORGE keeps each task's state read local: no forge calls.
@@ -99,24 +114,23 @@ async function refreshFleet($: EngineInterface): Promise<void> {
 const isPaneOpen = async ($: EngineInterface) => (await $.ui.panes()).some(pane => pane.id === PANE)
 
 export const register: Register = (on, options) => {
+  const configured = typeof options.fmHome === 'string' ? options.fmHome : ''
+
   on('session.start', async ($, e, next) => {
     const started = await next(e)
-    const configured = typeof options.fmHome === 'string' ? options.fmHome : ''
-    const root = configured || (await $.env.get('FM_HOME')) || started.cwd
-    await update($, home, () => root.replace(/\/+$/, ''))
     await $.command.register({
       name: 'fleet',
       description: "Show or hide a read-only pane of Firstmate's tasks in flight and wake queue",
     })
 
-    $.clock.every(WAKES_EVERY_MS, () => void refreshWakes($).catch(() => undefined))
+    $.clock.every(WAKES_EVERY_MS, () => void refreshWakes($, configured).catch(() => undefined))
     $.clock.every(FLEET_EVERY_MS, () => {
       void (async () => {
-        if (await isPaneOpen($)) await refreshFleet($)
+        if (await isPaneOpen($)) await refreshFleet($, configured)
       })().catch(() => undefined)
     })
-    void refreshWakes($).catch(() => undefined)
-    void refreshFleet($).catch(() => undefined)
+    void refreshWakes($, configured).catch(() => undefined)
+    void refreshFleet($, configured).catch(() => undefined)
     return started
   })
 
@@ -126,8 +140,9 @@ export const register: Register = (on, options) => {
       return { text: 'Firstmate fleet pane closed.' }
     }
     await $.ui.open({ id: PANE, title: TITLE })
-    void refreshFleet($).catch(() => undefined)
-    return { text: `Firstmate fleet: observing ${await read($, home)}` }
+    void refreshFleet($, configured).catch(() => undefined)
+    const root = await fleetHome($, configured)
+    return { text: root === '' ? `Firstmate fleet: ${NO_HOME}` : `Firstmate fleet: observing ${root}` }
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
@@ -215,7 +230,7 @@ export const register: Register = (on, options) => {
         ))}
         {r.wakes.length > WAKES_SHOWN && <Text dimColor>… {r.wakes.length - WAKES_SHOWN} older</Text>}
         <Box marginTop={1} flexDirection="row" gap={1}>
-          <Button key="refresh" label={r.isRefreshing ? 'refreshing…' : 'refresh'} hotkey="r" onPress={() => refreshFleet($)} />
+          <Button key="refresh" label={r.isRefreshing ? 'refreshing…' : 'refresh'} hotkey="r" onPress={() => refreshFleet($, configured)} />
           <Text dimColor>read only · wakes every 5s · fleet every 30s while open</Text>
         </Box>
       </Box>
