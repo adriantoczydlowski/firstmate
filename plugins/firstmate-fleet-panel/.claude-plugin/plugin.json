@@ -1,0 +1,17 @@
+{
+  "name": "firstmate-fleet-panel",
+  "version": "0.1.0",
+  "description": "A read-only pane of Firstmate's own fleet: each task in flight with its current state and latest status event, and the wake queue.",
+  "author": {
+    "name": "Firstmate"
+  },
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "fmHome": {
+      "type": "string",
+      "title": "Firstmate home",
+      "description": "The Firstmate home to observe; empty uses $FM_HOME, then the session's working directory",
+      "default": ""
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "skins",
+  "version": "0.1.0",
+  "description": "Skins for Claude Code's own interface: /skin <name> restyles your prompts, Claude's replies, the spinner and the turn footer.",
+  "author": {
+    "name": "Firstmate"
+  },
+  "types": "./types/index.d.ts"
+}
