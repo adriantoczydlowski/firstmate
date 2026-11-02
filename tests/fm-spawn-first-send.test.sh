@@ -63,6 +63,20 @@ case "$*" in
     ;;
 esac
 case "${1:-}" in
+  new-window)
+    # The tmux backend confirms a target window exists before it sends a key,
+    # so remember the window this spawn creates and list it back below.
+    prev=
+    for a in "$@"; do
+      [ "$prev" = -n ] && printf '%s\n' "$a" >> "${FM_FAKE_DELIVERED:?}.windows"
+      prev=$a
+    done
+    exit 0
+    ;;
+  list-windows)
+    cat "${FM_FAKE_DELIVERED:?}.windows" 2>/dev/null || true
+    exit 0
+    ;;
   send-keys)
     shift
     literal=0
@@ -163,6 +177,9 @@ make_case() {
   fakebin=$(make_lossy_fakebin "$case_dir/fake")
   mkdir -p "$home/data" "$home/projects" "$home/state" "$home/config" "$case_dir/tmp"
   printf 'codex\n' > "$home/config/crew-harness"
+  # This suite is about the first-send gate, not backlog bookkeeping, so the
+  # fixture home opts out of fm-spawn's backlog transition the documented way.
+  printf 'manual\n' > "$home/config/backlog-backend"
   fm_git_worktree "$proj" "$wt" "wt-$name"
   mkdir -p "$home/data/$id"
   # fm-spawn.sh refuses a brief whose Task subsections are empty, so the fixture
