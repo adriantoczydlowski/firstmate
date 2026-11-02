@@ -48,6 +48,19 @@ umask 022
 # strips this to verify real refusal.
 export FM_GATE_REFUSE_BYPASS=1
 
+# Exempt firstmate's own fixture-based suites from fm-spawn.sh's first-send
+# shell-readiness gate (bin/fm-spawn.sh, spawn_await_shell_ready). That gate
+# proves a pane's shell is reading command lines by waiting for a marker file the
+# pane itself must create; nearly every suite here drives the real fm-spawn.sh
+# against a FAKE backend whose send channel has no shell behind it, so the marker
+# can never appear and the gate would time out on fixtures that are not testing a
+# shell at all. tests/fm-spawn-first-send.test.sh strips this bypass to verify the
+# gate itself against a modelled byte-lossy shell. spawn_await_shell_ready's own
+# comment owns what this bypass therefore leaves unproven in portable CI lanes
+# and which follow-up closes it; do not restate that analysis here, because two
+# copies drift the moment only one is edited.
+export FM_SPAWN_READY_BYPASS=1
+
 # Arms the test-only seams bin/ scripts expose (e.g. fm-afk-launch.sh's
 # FM_TEST_HARNESS harness pin). Normal primary launches do not arm it, so a
 # leaked harness pin alone stays inert outside a suite.

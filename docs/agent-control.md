@@ -193,6 +193,8 @@ The worktree and the task's records are unaffected either way.
 - `fm-spawn --relaunch` independently refuses unless the endpoint is positively agent-free - either a `dead` endpoint that survives, or a Herdr or Rex endpoint proven gone by the absence proof above - so a replacement can never join a live agent.
   An `alive`, `ambiguous`, or `unreadable` verdict all refuse (a Rex `unreadable` after the absence proof cannot settle it), and so does any endpoint whose absence is not provable, which on tmux is every `missing`; absence is claimed only from positive evidence of it.
   It also requires the shell to be in the recorded worktree: every backend but Orca (which owns its own task worktree with no current-path probe) gets one explicit `cd` to the recorded path, then a pre-launch path read that refuses before any harness starts unless it confirms the endpoint is sitting in the recorded copy.
+- `fm-spawn.sh` also refuses unless that pane's shell proves it is reading command lines before each first send, including that `cd`, because a shell that silently drops the leading bytes of the first send would launch a corrupted command instead of failing.
+  [`bin/fm-spawn.sh`](../bin/fm-spawn.sh)'s header owns which sends are gated, the poll budget knobs, and the exact refusal wording.
 
 ## Capability matrix
 
