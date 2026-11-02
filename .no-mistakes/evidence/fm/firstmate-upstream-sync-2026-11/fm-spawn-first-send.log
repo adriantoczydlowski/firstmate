@@ -1,0 +1,14 @@
+ok - a lossy shell init cannot corrupt the first command line
+ok - the recorded-worktree cd and launch-environment sends are guarded too, not only treehouse get
+ok - an unready pane shell refuses the spawn loudly instead of sending into it
+ok - a healthy pane answers the first probe, and the probe precedes the command it guards
+ok - a zero budget knob falls back to its default instead of refusing every spawn
+ok - a failing send channel refuses promptly and names the channel, not the pane
+ok - status 2 is read as uncleared input only on the adapters that define it
+ok - an uncleared-input send failure is terminal on sight on the adapters that define it
+ok - intermittent send hiccups do not turn an unready pane into a send-channel abort
+ok - an unusable TMPDIR falls back to /tmp with a notice instead of failing the spawn
+ok - the gate stands down only for an explicit fixture bypass
+ok - readiness probe scratch is removed on both the success and refusal paths
+# all fm-spawn-first-send tests passed
+/bin/bash tests/$t.test.sh  6.53s user 8.86s system 40% cpu 37.585 total

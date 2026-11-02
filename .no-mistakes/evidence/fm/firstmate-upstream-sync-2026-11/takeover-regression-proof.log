@@ -1,0 +1,9 @@
+### bin/fm-watch.sh at ffb2aca0^ (before #7740), /bin/bash 3.2
+not ok - the take-over did not own a fresh cycle within 20s of a stop during the event wait: watcher: attached pid=39693 (beacon 14s)
+watcher: FAILED - cycle ended without an actionable reason
+rc=
+
+### bin/fm-watch.sh at HEAD (synced main), /bin/bash 3.2
+ok - watch-arm: --take-over of a watcher inside its herdr event wait confirms the stop and resurfaces nothing
+DONE
+rc=
