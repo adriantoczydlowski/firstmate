@@ -200,7 +200,7 @@ CHANGED_DEFAULT_TIMEOUT_SECS=1500
 
 # How many separate-runner shards the portable serial remainder splits into.
 # One owner: CI lane names carry this count and are refused when they disagree.
-PORTABLE_SERIAL_SHARDS=10
+PORTABLE_SERIAL_SHARDS=11
 
 # Conservative balance hint for a portable-serial script with no measurement.
 # Rounded above the current CI mean, including the capability-skipped scripts.
@@ -685,10 +685,17 @@ script_allows_concurrency() {
 }
 
 is_proven_isolated_script() {
-  local want=$1 line
-  while IFS= read -r line; do
-    [ "$line" = "$want" ] && return 0
-  done < <(list_proven_isolated)
+  # A command substitution, not `< <(...)`: macOS's Bash 3.2 leaks the
+  # descriptor of a process substitution, and this runs once per test script,
+  # so a large enough suite exhausts descriptors mid-walk and silently reports
+  # the last proven scripts as unproven.
+  case "
+$(list_proven_isolated)
+" in
+    *"
+$1
+"*) return 0 ;;
+  esac
   return 1
 }
 

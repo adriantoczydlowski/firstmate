@@ -962,17 +962,17 @@ test_open_captain_call_bounds_stale_churn() {
     [ "$wakes" -eq 0 ] \
       || fail "[$name] pane churn re-alarmed held work $wakes time(s) inside the re-surface window"
 
-    # After the window ends, the next new pane hash re-surfaces held work exactly
-    # once, so a forgotten call on a churning pane cannot hide behind the bound.
-    [ -e "$throttle" ] || fail "[$name] the absorbed churn recorded no re-surface cadence to elapse"
+    # Only the captain can end the call, so it is never rechecked: even after a
+    # full re-surface window has elapsed, further churn stays absorbed.
+    [ -e "$throttle" ] || fail "[$name] the absorbed churn recorded no declaration to bound"
     set_mtime "$(( $(date +%s) - 5000 ))" "$throttle"
-    hold_watch_surface "$dir" "$out" "$capture" 'idle, elapsed 9s' \
-      || fail "[$name] held work did not re-surface once its re-surface window elapsed"
+    hold_watch_churn "$dir" "$out" "$capture" 'idle, elapsed' 1 \
+      || fail "[$name] watcher exited after the window elapsed instead of absorbing: $(cat "$out")"
     wakes=$(hold_stale_wakes "$state")
-    [ "$wakes" -eq 1 ] \
-      || fail "[$name] elapsed re-surface window produced $wakes wakes instead of one"
+    [ "$wakes" -eq 0 ] \
+      || fail "[$name] held work was rechecked $wakes time(s) after the window elapsed"
   done
-  pass "work under an open captain call surfaces once, absorbs pane churn, then re-surfaces when the window elapses"
+  pass "work under an open captain call surfaces once, then absorbs pane churn and is never rechecked"
 }
 
 

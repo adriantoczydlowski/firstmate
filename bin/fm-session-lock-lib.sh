@@ -1336,7 +1336,11 @@ fm_session_lock_trusted_session_id() {  # [<ancestry-pids>]
         fm_harness_process_matches "$comm" "$args" || return 1
         ;;
       "$FM_WIN_PID_PREFIX$claude_pid")
-        fm_harness_pid_alive "$pid" || return 1
+        # Matched here rather than through fm_harness_pid_alive, whose verdict
+        # comes from a command substitution and so cannot carry
+        # FM_HARNESS_IS_CLAUDE back to this check.
+        comm=$(fm_win_command "$claude_pid") || return 1
+        fm_harness_process_matches "$comm" "$comm" || return 1
         ;;
       *) continue ;;
     esac
